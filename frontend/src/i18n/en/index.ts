@@ -11,7 +11,7 @@ const translation = {
       myBots: 'My Bots',
       discoverBots: 'Discover Bots',
       pinnedBots: 'Pinned Bots',
-      starredBots: 'Starred Bots',
+      starredBots: 'Favourite Bots',
       recentlyUsedBots: 'Recently Used Bots',
       conversationHistory: 'Recent Chats',
       chatWaitingSymbol: '▍',
@@ -258,7 +258,7 @@ const translation = {
         notAvailable: 'This bot is NOT available.',
         noBots: 'No Bots.',
         noBotsRecentlyUsed: 'No Recently Used Bots.',
-        noStarredBots: 'No Starred Bots.',
+        noStarredBots: 'No Favourite Bots.',
         retrievingKnowledge: '[Retrieving Knowledge...]',
         dndFileUpload:
           'You can upload files by drag and drop.\nSupported files: {{fileExtensions}}',
@@ -664,7 +664,7 @@ How would you categorize this email?`,
           title: 'No Essential Bots',
           content: `Essential section is hidden for non-admin users since there are no Essential bots.<br/>
           Bots shared with All Users can be marked as Essential.<br/>
-          Use the bot menu in Chat, My Bots, Starred Bots, or Recently Used Bots views to mark a bot as Essential.<br/>
+          Use the bot menu in Chat, My Bots, Favourite Bots, or Recently Used Bots views to mark a bot as Essential.<br/>
           Click the <MenuButton/> button on these views to access the menu.`,
         },
       },
