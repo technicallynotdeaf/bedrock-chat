@@ -2,6 +2,8 @@ import logging
 from datetime import timezone
 from typing import Callable
 
+from botocore.exceptions import ClientError
+
 from app.agents.tools.agent_tool import ToolRunResult
 from app.agents.tools.internet_search import InternetSearchInput, _internet_search
 from app.agents.utils import get_tools
@@ -252,6 +254,61 @@ def trace_to_root(
     return result[::-1]
 
 
+def _trim_messages_for_context_window(
+    messages: list[SimpleMessageModel],
+) -> list[SimpleMessageModel]:
+    """Remove the oldest user/assistant turn pair to reduce prompt token count.
+
+    Preserves:
+    - The first message (system/instruction)
+    - The last message (current user input)
+    - Valid role alternation after trimming
+
+    Returns a shorter list, or raises ValueError if there is nothing left to trim.
+    """
+    if len(messages) <= 2:
+        raise ValueError(
+            "Cannot trim conversation further — only the system prompt and "
+            "current message remain, yet the prompt still exceeds the model's "
+            "context window. Try using a shorter attachment or starting a new conversation."
+        )
+
+    # Find the first removable message (index 1, right after system/instruction).
+    # Remove messages from the front of the history (oldest) until we drop at
+    # least one complete user+assistant pair so that role alternation stays valid.
+    trimmed = list(messages)
+    removed = 0
+    while len(trimmed) > 2:
+        # Remove the message right after the system/instruction message
+        trimmed.pop(1)
+        removed += 1
+        # Check if the message at index 1 (new position) has valid alternation
+        # with the system message at index 0.  The first real turn should be a
+        # "user" message.  Keep removing until that holds.
+        if trimmed[1].role == "user":
+            break
+
+    logger.info(
+        f"Trimmed {removed} oldest message(s) from conversation history "
+        f"({len(messages)} -> {len(trimmed)} messages) to fit context window"
+    )
+    return trimmed
+
+
+def _is_prompt_too_long_error(e: Exception) -> bool:
+    """Check if the exception is a Bedrock 'prompt is too long' validation error."""
+    if isinstance(e, ClientError):
+        error_code = e.response.get("Error", {}).get("Code", "")
+        error_message = e.response.get("Error", {}).get("Message", "")
+        if error_code == "ValidationException" and "prompt is too long" in error_message.lower():
+            return True
+    # Strands may wrap the error — check the string representation
+    error_str = str(e)
+    if "prompt is too long" in error_str.lower() and "maximum" in error_str.lower():
+        return True
+    return False
+
+
 def chat(
     user: User,
     chat_input: ChatInput,
@@ -447,44 +504,62 @@ def chat(
 
     """
     Routes to Strands or legacy implementation based on USE_STRANDS environment variable.
+    Retries with progressively trimmed conversation history if the prompt exceeds the
+    model's context window.
     """
     import os
 
     use_strands = os.environ.get("USE_STRANDS", "true").lower() == "true"
+    MAX_TRIM_RETRIES = 20
 
-    if use_strands:
-        from app.strands_integration.chat_strands import converse_with_strands
+    for attempt in range(MAX_TRIM_RETRIES + 1):
+        try:
+            if use_strands:
+                from app.strands_integration.chat_strands import converse_with_strands
 
-        result = converse_with_strands(
-            bot=bot,
-            chat_input=chat_input,
-            instructions=instructions,
-            generation_params=generation_params,
-            guardrail=guardrail,
-            display_citation=display_citation,
-            messages=messages,
-            search_results=search_results,
-            on_stream=on_stream,
-            on_thinking=on_thinking,
-            on_tool_result=on_tool_run_result,
-            on_reasoning=on_reasoning,
-        )
-
-    else:
-        result = converse_legacy(
-            bot=bot,
-            chat_input=chat_input,
-            instructions=instructions,
-            generation_params=generation_params,
-            guardrail=guardrail,
-            display_citation=display_citation,
-            messages=messages,
-            search_results=search_results,
-            on_stream=on_stream,
-            on_thinking=on_thinking,
-            on_tool_result=on_tool_run_result,
-            on_reasoning=on_reasoning,
-        )
+                result = converse_with_strands(
+                    bot=bot,
+                    chat_input=chat_input,
+                    instructions=instructions,
+                    generation_params=generation_params,
+                    guardrail=guardrail,
+                    display_citation=display_citation,
+                    messages=messages,
+                    search_results=search_results,
+                    on_stream=on_stream,
+                    on_thinking=on_thinking,
+                    on_tool_result=on_tool_run_result,
+                    on_reasoning=on_reasoning,
+                )
+            else:
+                result = converse_legacy(
+                    bot=bot,
+                    chat_input=chat_input,
+                    instructions=instructions,
+                    generation_params=generation_params,
+                    guardrail=guardrail,
+                    display_citation=display_citation,
+                    messages=messages,
+                    search_results=search_results,
+                    on_stream=on_stream,
+                    on_thinking=on_thinking,
+                    on_tool_result=on_tool_run_result,
+                    on_reasoning=on_reasoning,
+                )
+            break  # Success — exit retry loop
+        except Exception as e:
+            if _is_prompt_too_long_error(e) and attempt < MAX_TRIM_RETRIES:
+                logger.warning(
+                    f"Prompt too long (attempt {attempt + 1}), "
+                    f"trimming oldest messages and retrying..."
+                )
+                try:
+                    messages = _trim_messages_for_context_window(messages)
+                except ValueError:
+                    # Nothing left to trim — re-raise the original error
+                    raise e
+            else:
+                raise
 
     # Post handling: process the result and update conversation
     return post_process_result(
