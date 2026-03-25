@@ -56,6 +56,7 @@ from app.user import User
 from app.base_prompt import BASE_SYSTEM_PROMPT
 from app.pdf_url_handler import download_pdf, extract_pdf_urls
 from app.utils import get_aest_now, get_current_time
+from app.web_url_handler import extract_web_urls, fetch_urls_content
 from app.vector_search import (
     SearchResult,
     search_related_docs,
@@ -106,6 +107,25 @@ def process_pdf_urls_in_message(message: MessageModel) -> list[str]:
         logger.info(f"Added PDF attachment from URL: {url} as {filename}")
 
     return processed_urls
+
+
+def process_web_urls_in_message(message: MessageModel) -> list[tuple[str, str]]:
+    """Scan text content for web page URLs, fetch their content, and return as context.
+
+    Returns a list of (url, content) tuples for successfully extracted pages.
+    PDF URLs are excluded (handled separately by process_pdf_urls_in_message).
+    """
+    web_urls: list[str] = []
+    for content in message.content:
+        if isinstance(content, TextContentModel):
+            urls = extract_web_urls(content.body)
+            web_urls.extend(urls)
+
+    if not web_urls:
+        return []
+
+    logger.info(f"Found {len(web_urls)} web URL(s) in message: {web_urls}")
+    return fetch_urls_content(web_urls)
 
 
 def prepare_conversation(
@@ -324,6 +344,7 @@ def chat(
     message_map = conversation.message_map
 
     # Process PDF URLs in the user message: detect, download, and attach as documents
+    web_url_context: list[tuple[str, str]] = []
     if not chat_input.continue_generate:
         user_message = message_map.get(user_msg_id)
         if user_message:
@@ -331,6 +352,12 @@ def chat(
             if processed_pdf_urls:
                 logger.info(
                     f"Processed {len(processed_pdf_urls)} PDF URL(s) from user message"
+                )
+            # Extract and fetch web page content from URLs in the message
+            web_url_context = process_web_urls_in_message(user_message)
+            if web_url_context:
+                logger.info(
+                    f"Extracted content from {len(web_url_context)} web URL(s)"
                 )
     instructions: list[str] = (
         [
@@ -351,6 +378,19 @@ def chat(
         "If the user asks about the current time or date, ask them where they are located or "
         "what timezone they are in, then calculate and provide their local time based on the UTC time above.",
     )
+
+    # Inject extracted web page content into instructions so the model can analyse it
+    if web_url_context:
+        url_context_lines = [
+            "The user's message contains the following web page URL(s). "
+            "Their content has been fetched and is provided below for your analysis. "
+            "Use this content to answer the user's question about these pages.\n"
+        ]
+        for url, content in web_url_context:
+            url_context_lines.append(
+                f"--- Content from {url} ---\n{content}\n--- End of content ---\n"
+            )
+        instructions.append("\n".join(url_context_lines))
 
     related_documents: list[RelatedDocumentModel] = []
     search_results: list[SearchResult] = []
