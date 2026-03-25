@@ -7,6 +7,9 @@ import { PostStreamingStatus } from '../constants';
 
 const WS_ENDPOINT: string = import.meta.env.VITE_APP_WS_ENDPOINT;
 const CHUNK_SIZE = 32 * 1024; //32KB
+// Max chunks to send in parallel before waiting for acks.
+// Keeps concurrent Lambda invocations low to avoid throttling.
+const CHUNK_BATCH_SIZE = 10;
 
 const usePostMessageStreaming = create<{
   post: (params: {
@@ -37,6 +40,29 @@ const usePostMessageStreaming = create<{
       }
 
       let receivedCount = 0;
+      let nextBatchStart = 0;
+
+      const sendNextBatch = (ws: WebSocket) => {
+        if (nextBatchStart >= chunkedPayloads.length) return;
+        const batchEnd = Math.min(
+          nextBatchStart + CHUNK_BATCH_SIZE,
+          chunkedPayloads.length
+        );
+        console.log(
+          `[FRONTEND_WS] Sending chunk batch ${nextBatchStart}-${batchEnd - 1} of ${chunkedPayloads.length}`
+        );
+        for (let i = nextBatchStart; i < batchEnd; i++) {
+          ws.send(
+            JSON.stringify({
+              step: PostStreamingStatus.BODY,
+              index: i,
+              part: chunkedPayloads[i],
+            })
+          );
+        }
+        nextBatchStart = batchEnd;
+      };
+
       return new Promise<void>((resolve, reject) => {
         const ws = new WebSocket(WS_ENDPOINT);
 
@@ -63,25 +89,21 @@ const usePostMessageStreaming = create<{
             ) {
               return;
             } else if (message.data === 'Session started.') {
-              chunkedPayloads.forEach((chunk, index) => {
-                ws.send(
-                  JSON.stringify({
-                    step: PostStreamingStatus.BODY,
-                    index,
-                    part: chunk,
-                  })
-                );
-              });
+              sendNextBatch(ws);
               return;
             } else if (message.data === 'Message part received.') {
               receivedCount++;
               if (receivedCount === chunkedPayloads.length) {
+                // All chunks acknowledged — send END
                 ws.send(
                   JSON.stringify({
                     step: PostStreamingStatus.END,
                     token: token,
                   })
                 );
+              } else if (receivedCount >= nextBatchStart) {
+                // Current batch fully acked — send next batch
+                sendNextBatch(ws);
               }
               return;
             }
