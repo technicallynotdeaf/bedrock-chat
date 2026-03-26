@@ -10,7 +10,6 @@ Supported formats: PDF, DOCX, TXT, MD, CSV, HTML, XLSX.
 
 import io
 import logging
-from typing import Sequence
 
 from app.repositories.models.conversation import (
     AttachmentContentModel,
@@ -32,11 +31,28 @@ MAX_DOCUMENT_TOKENS = 80_000
 MAX_DOCUMENT_CHARS = MAX_DOCUMENT_TOKENS * CHARS_PER_TOKEN  # 320,000 chars
 
 # Size threshold in bytes: documents larger than this are candidates for chunking.
-# ~500KB of raw bytes (before base64) is roughly where we start risking context overflow.
-LARGE_DOCUMENT_THRESHOLD_BYTES = 500_000
+# Bedrock's native PDF handling has a 100-page limit and can exhaust the context
+# window for text-heavy documents. Even a ~200KB text-dense PDF can tokenize to
+# well over 50K tokens. Use a conservative threshold to catch these early.
+LARGE_DOCUMENT_THRESHOLD_BYTES = 50_000  # 50KB
 
 # Chunk size in characters for splitting extracted text.
 CHUNK_SIZE_CHARS = 50_000  # ~12,500 tokens per chunk
+
+# Maximum PDF pages to process natively via Bedrock (without text extraction).
+# PDFs with more pages than this MUST be text-extracted and chunked.
+MAX_PDF_PAGES_FOR_NATIVE = 100
+
+
+def _get_pdf_page_count(data: bytes) -> int | None:
+    """Return the number of pages in a PDF, or None if unreadable."""
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(data))
+        return len(reader.pages)
+    except Exception:
+        return None
 
 
 def _extract_text_from_pdf(data: bytes) -> str:
@@ -54,6 +70,27 @@ def _extract_text_from_pdf(data: bytes) -> str:
     except Exception as e:
         logger.warning(f"Failed to extract text from PDF: {e}")
         return ""
+
+
+def _split_pdf_to_subset(data: bytes, max_pages: int) -> bytes | None:
+    """Return a new PDF containing only the first max_pages pages."""
+    try:
+        from pypdf import PdfReader, PdfWriter
+
+        reader = PdfReader(io.BytesIO(data))
+        if len(reader.pages) <= max_pages:
+            return data
+
+        writer = PdfWriter()
+        for i in range(min(max_pages, len(reader.pages))):
+            writer.add_page(reader.pages[i])
+
+        output = io.BytesIO()
+        writer.write(output)
+        return output.getvalue()
+    except Exception as e:
+        logger.warning(f"Failed to split PDF: {e}")
+        return None
 
 
 def _extract_text_from_docx(data: bytes) -> str:
@@ -156,8 +193,25 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE_CHARS) -> list[str]:
 
 
 def should_chunk_attachment(attachment: AttachmentContentModel) -> bool:
-    """Determine if an attachment should be chunked based on size."""
-    return len(attachment.body) > LARGE_DOCUMENT_THRESHOLD_BYTES
+    """Determine if an attachment should be chunked based on size.
+
+    Also checks PDF page count — PDFs over 100 pages must be chunked
+    regardless of byte size because Bedrock rejects them.
+    """
+    if len(attachment.body) > LARGE_DOCUMENT_THRESHOLD_BYTES:
+        return True
+
+    ext = attachment.file_name.rsplit(".", 1)[-1].lower() if "." in attachment.file_name else ""
+    if ext == "pdf":
+        page_count = _get_pdf_page_count(attachment.body)
+        if page_count is not None and page_count > MAX_PDF_PAGES_FOR_NATIVE:
+            logger.info(
+                f"PDF {attachment.file_name} has {page_count} pages "
+                f"(limit: {MAX_PDF_PAGES_FOR_NATIVE}), will chunk"
+            )
+            return True
+
+    return False
 
 
 def chunk_attachment(
@@ -170,23 +224,77 @@ def chunk_attachment(
     the document text (truncated to max_total_chars). The original attachment
     is replaced.
 
-    If text extraction fails, returns the original attachment unchanged so
-    Bedrock can attempt to process it natively.
+    If text extraction fails for a PDF, tries to split it into a smaller PDF
+    (first N pages) that Bedrock can handle natively. If that also fails,
+    returns an error text block explaining the issue.
     """
     file_name = attachment.file_name
+    file_size = len(attachment.body)
+    ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
     logger.info(
         f"Attempting to chunk large document: {file_name} "
-        f"({len(attachment.body):,} bytes)"
+        f"({file_size:,} bytes)"
     )
 
     extracted_text = extract_text_from_document(attachment.body, file_name)
 
     if not extracted_text.strip():
         logger.warning(
-            f"Could not extract text from {file_name}. "
-            f"Sending original attachment to Bedrock."
+            f"Could not extract text from {file_name}."
         )
-        return [attachment]
+        # For PDFs: try to send a truncated version (first N pages)
+        if ext == "pdf":
+            page_count = _get_pdf_page_count(attachment.body)
+            if page_count is not None and page_count > MAX_PDF_PAGES_FOR_NATIVE:
+                subset = _split_pdf_to_subset(attachment.body, MAX_PDF_PAGES_FOR_NATIVE)
+                if subset is not None:
+                    logger.info(
+                        f"Sending first {MAX_PDF_PAGES_FOR_NATIVE} of {page_count} "
+                        f"pages for {file_name}"
+                    )
+                    return [
+                        TextContentModel(
+                            content_type="text",
+                            body=(
+                                f"[Note: The PDF '{file_name}' has {page_count} pages. "
+                                f"Only the first {MAX_PDF_PAGES_FOR_NATIVE} pages are "
+                                f"included due to size limits. Text extraction was not "
+                                f"possible for this document (it may be scanned/image-based).]"
+                            ),
+                        ),
+                        AttachmentContentModel(
+                            content_type="attachment",
+                            body=subset,
+                            file_name=file_name,
+                        ),
+                    ]
+
+            # PDF is under page limit but too large by byte size and no text extracted
+            # This is likely a scanned/image-heavy PDF. Return the original with a warning.
+            if file_size <= 4_500_000:  # Under Bedrock's 4.5MB doc limit
+                logger.info(
+                    f"Returning original PDF {file_name} (no text extracted, "
+                    f"under size limit)"
+                )
+                return [attachment]
+
+        # Document is too large and we can't extract text — return an error message
+        logger.error(
+            f"Cannot process {file_name}: too large ({file_size:,} bytes) "
+            f"and text extraction failed"
+        )
+        return [
+            TextContentModel(
+                content_type="text",
+                body=(
+                    f"[Error: The document '{file_name}' ({file_size / 1_048_576:.1f} MB) "
+                    f"is too large to process. Text could not be extracted from this file. "
+                    f"This may happen with scanned documents or image-heavy PDFs. "
+                    f"Please try uploading a smaller document, a text-based version, "
+                    f"or copy-paste the relevant text directly.]"
+                ),
+            )
+        ]
 
     logger.info(
         f"Extracted {len(extracted_text):,} characters from {file_name} "
@@ -194,7 +302,9 @@ def chunk_attachment(
     )
 
     # Truncate if needed
+    was_truncated = False
     if len(extracted_text) > max_total_chars:
+        was_truncated = True
         logger.info(
             f"Truncating document from {len(extracted_text):,} to "
             f"{max_total_chars:,} characters to fit context window"
@@ -213,10 +323,15 @@ def chunk_attachment(
     result: list[ContentModel] = []
 
     # Header block
+    truncation_note = (
+        " The document was truncated to fit within the context window — "
+        "not all content is included."
+        if was_truncated
+        else ""
+    )
     header = (
         f"[Document: {file_name} — Text extracted and split into "
-        f"{total_chunks} chunk(s) because the original document was too large "
-        f"for the context window]"
+        f"{total_chunks} chunk(s).{truncation_note}]"
     )
 
     for i, chunk in enumerate(chunks):
