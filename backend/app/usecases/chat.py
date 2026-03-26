@@ -55,6 +55,7 @@ from app.usecases.bot import fetch_bot, modify_bot_last_used_time, modify_bot_st
 from app.usecases.global_config import get_title_model
 from app.user import User
 from app.base_prompt import BASE_SYSTEM_PROMPT
+from app.document_chunker import process_attachments_for_context_window
 from app.pdf_url_handler import download_pdf, extract_pdf_urls
 from app.utils import get_aest_now, get_current_time
 from app.web_url_handler import extract_web_urls, fetch_urls_content
@@ -598,6 +599,19 @@ def chat(
     # Strip document/image attachments from historical messages to avoid
     # exceeding Bedrock's 100-page PDF limit across the full conversation
     messages = _strip_attachments_from_history(messages)
+
+    # Chunk large document attachments in the current user message to avoid
+    # exceeding the model's context window (~200K tokens)
+    if messages:
+        last_user_msg = None
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].role == "user":
+                last_user_msg = messages[i]
+                break
+        if last_user_msg is not None:
+            last_user_msg.content = process_attachments_for_context_window(
+                last_user_msg.content
+            )
 
     generation_params = bot.generation_params if bot else None
 
