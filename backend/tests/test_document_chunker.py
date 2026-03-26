@@ -107,15 +107,27 @@ class TestChunkAttachment:
         # First chunk should have the header
         assert "[Document: large.txt" in result[0].body
 
-    def test_returns_original_on_extraction_failure(self):
-        # Binary data that can't be extracted
+    def test_returns_error_text_when_extraction_fails_and_too_large(self):
+        # Binary data that can't be extracted AND is over the Bedrock 4.5MB limit
         att = AttachmentContentModel(
             content_type="attachment",
-            body=b"\x00\x01\x02\x03" * 200000,
-            file_name="binary.dat",
+            body=b"\x00\x01\x02\x03" * 2_000_000,  # 8MB
+            file_name="huge_binary.dat",
         )
         result = chunk_attachment(att)
-        # Should return original attachment since extraction fails
+        assert len(result) == 1
+        assert isinstance(result[0], TextContentModel)
+        assert "[Error:" in result[0].body
+
+    def test_returns_original_when_extraction_fails_but_small_pdf(self):
+        # A small PDF-like file where extraction fails but it's under 4.5MB
+        # (Bedrock can try to process it natively)
+        att = AttachmentContentModel(
+            content_type="attachment",
+            body=b"%PDF-1.4 fake small pdf content" + b"\x00" * 1000,
+            file_name="small.pdf",
+        )
+        result = chunk_attachment(att)
         assert len(result) == 1
         assert result[0] is att
 
@@ -128,9 +140,23 @@ class TestChunkAttachment:
             file_name="huge.txt",
         )
         result = chunk_attachment(att)
-        total_chars = sum(len(r.body) for r in result if isinstance(r, TextContentModel))
+        total_chars = sum(
+            len(r.body) for r in result if isinstance(r, TextContentModel)
+        )
         # Should be within reasonable limits (MAX_DOCUMENT_CHARS + overhead for headers)
         assert total_chars <= MAX_DOCUMENT_CHARS + 10_000
+
+    def test_truncated_document_includes_note(self):
+        # Create content larger than MAX_DOCUMENT_CHARS
+        content = ("X" * 1000 + "\n\n") * 1000  # ~1M chars
+        att = AttachmentContentModel(
+            content_type="attachment",
+            body=content.encode("utf-8"),
+            file_name="huge.txt",
+        )
+        result = chunk_attachment(att)
+        # First chunk header should mention truncation
+        assert "truncated" in result[0].body.lower()
 
 
 class TestProcessAttachmentsForContextWindow:

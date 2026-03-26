@@ -679,7 +679,40 @@ def chat(
                 try:
                     messages = _trim_messages_for_context_window(messages)
                 except ValueError:
-                    # Nothing left to trim — re-raise the original error
+                    # Nothing left to trim — try aggressive chunking on
+                    # remaining attachments as a last resort
+                    from app.document_chunker import (
+                        chunk_attachment,
+                        MAX_DOCUMENT_CHARS,
+                    )
+
+                    last_user = None
+                    for msg in reversed(messages):
+                        if msg.role == "user":
+                            last_user = msg
+                            break
+
+                    if last_user is not None:
+                        reduced_limit = MAX_DOCUMENT_CHARS // 2
+                        new_content: list = []
+                        found_attachment = False
+                        for c in last_user.content:
+                            if isinstance(c, AttachmentContentModel):
+                                found_attachment = True
+                                new_content.extend(
+                                    chunk_attachment(c, max_total_chars=reduced_limit)
+                                )
+                            else:
+                                new_content.append(c)
+                        if found_attachment:
+                            last_user.content = new_content
+                            logger.info(
+                                "Applied aggressive document chunking after "
+                                "trim exhaustion"
+                            )
+                            continue
+
+                    # No attachments to chunk — re-raise original error
                     raise e
             else:
                 raise
