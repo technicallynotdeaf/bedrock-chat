@@ -270,8 +270,8 @@ def create_docx_tool(bot: BotModel | None = None) -> StrandsAgentTool:
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
         return (
-            f"Word document '{filename}' generated successfully.\n"
-            f"Download (link valid 1 hour):\n{url}"
+            f"Word document '{filename}' generated successfully.\n\n"
+            f"[{filename}]({url})"
         )
 
     return generate_docx
@@ -401,8 +401,8 @@ def create_pptx_tool(bot: BotModel | None = None) -> StrandsAgentTool:
         )
         return (
             f"PowerPoint presentation '{filename}' generated successfully "
-            f"({len(slides_data)} content slides + title slide).\n"
-            f"Download (link valid 1 hour):\n{url}"
+            f"({len(slides_data)} content slides + title slide).\n\n"
+            f"[{filename}]({url})"
         )
 
     return generate_pptx
@@ -529,8 +529,8 @@ def create_xlsx_tool(bot: BotModel | None = None) -> StrandsAgentTool:
         )
         return (
             f"Excel spreadsheet '{filename}' generated successfully "
-            f"({len(sheets_data)} sheet(s)).\n"
-            f"Download (link valid 1 hour):\n{url}"
+            f"({len(sheets_data)} sheet(s)).\n\n"
+            f"[{filename}]({url})"
         )
 
     return generate_xlsx
@@ -891,8 +891,8 @@ def create_chart_tool(bot: BotModel | None = None) -> StrandsAgentTool:
 
         url = _upload_and_presign(svg_bytes, filename, "image/svg+xml")
         return (
-            f"Chart '{filename}' ({chart_type}) generated successfully.\n"
-            f"View/download (link valid 1 hour):\n{url}"
+            f"Chart '{filename}' ({chart_type}) generated successfully.\n\n"
+            f"[{filename}]({url})"
         )
 
     return generate_chart
