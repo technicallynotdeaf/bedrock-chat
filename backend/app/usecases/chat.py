@@ -25,6 +25,7 @@ from app.repositories.custom_bot import alias_exists, store_alias
 from app.repositories.models.conversation import (
     AttachmentContentModel,
     ConversationModel,
+    ImageContentModel,
     MessageModel,
     ReasoningContentModel,
     RelatedDocumentModel,
@@ -272,6 +273,70 @@ def trace_to_root(
         current_node = message_map.get(parent_id)
 
     return result[::-1]
+
+
+def _strip_attachments_from_history(
+    messages: list[SimpleMessageModel],
+) -> list[SimpleMessageModel]:
+    """Remove document/image attachments from all messages except the last user message.
+
+    Bedrock counts total PDF pages across ALL messages in a single API call.
+    When conversation history includes previous user messages with PDF attachments,
+    the cumulative page count can exceed the model's 100-page limit even though
+    each individual document is under 100 pages.
+
+    Since the model already processed those documents in prior turns, stripping
+    them from history preserves conversational context (via the text) while
+    staying within document limits.
+    """
+    if not messages:
+        return messages
+
+    # Find the index of the last user message (the current input)
+    last_user_idx = None
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].role == "user":
+            last_user_idx = i
+            break
+
+    result = []
+    for i, msg in enumerate(messages):
+        if i == last_user_idx:
+            # Keep the current user message intact
+            result.append(msg)
+        elif any(
+            isinstance(c, (AttachmentContentModel, ImageContentModel))
+            for c in msg.content
+        ):
+            # Strip attachment/image content from historical messages,
+            # keeping text and other content types
+            filtered_content = [
+                c
+                for c in msg.content
+                if not isinstance(c, (AttachmentContentModel, ImageContentModel))
+            ]
+            if filtered_content:
+                result.append(
+                    SimpleMessageModel(role=msg.role, content=filtered_content)
+                )
+            else:
+                # If the message only had attachments, replace with a placeholder
+                # to maintain role alternation
+                result.append(
+                    SimpleMessageModel(
+                        role=msg.role,
+                        content=[
+                            TextContentModel(
+                                content_type="text",
+                                body="[Document previously provided]",
+                            )
+                        ],
+                    )
+                )
+        else:
+            result.append(msg)
+
+    return result
 
 
 def _trim_messages_for_context_window(
@@ -529,6 +594,10 @@ def chat(
             SimpleMessageModel.from_message_model(message=message_map[user_msg_id]),
         )
         message_for_continue_generate = None
+
+    # Strip document/image attachments from historical messages to avoid
+    # exceeding Bedrock's 100-page PDF limit across the full conversation
+    messages = _strip_attachments_from_history(messages)
 
     generation_params = bot.generation_params if bot else None
 
@@ -890,6 +959,8 @@ def propose_conversation_title(
         node_id=conversation.last_message_id,
         message_map=conversation.message_map,
     )
+    # Strip attachments — title generation doesn't need document content
+    messages = _strip_attachments_from_history(messages)
 
     # Append message to generate title
     new_message = SimpleMessageModel(
