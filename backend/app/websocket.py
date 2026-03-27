@@ -330,19 +330,17 @@ def handler(event, context):
             user_id = session_data["user_id"]  # noqa: F841 – kept for audit / future use
 
             # List all chunk objects (excludes session.json via prefix filtering)
+            # Use paginator to handle >1000 chunks safely.
             chunk_prefix = _chunk_prefix(connection_id)
-            response = s3_client.list_objects_v2(
-                Bucket=LARGE_PAYLOAD_SUPPORT_BUCKET,
-                Prefix=chunk_prefix,
-            )
-            chunk_objects = sorted(
-                [
-                    obj
-                    for obj in response.get("Contents", [])
-                    if not obj["Key"].endswith("session.json")
-                ],
-                key=lambda obj: obj["Key"],
-            )
+            paginator = s3_client.get_paginator("list_objects_v2")
+            all_objects = []
+            for page in paginator.paginate(
+                Bucket=LARGE_PAYLOAD_SUPPORT_BUCKET, Prefix=chunk_prefix
+            ):
+                for obj in page.get("Contents", []):
+                    if not obj["Key"].endswith("session.json"):
+                        all_objects.append(obj)
+            chunk_objects = sorted(all_objects, key=lambda obj: obj["Key"])
 
             logger.info(f"Number of message chunks: {len(chunk_objects)}")
 
@@ -410,7 +408,7 @@ def handler(event, context):
                 Key=_chunk_key(connection_id, part_index),
                 Body=message_part,
             )
-            return {"statusCode": 200, "body": json.dumps({"ack": part_index})}
+            return {"statusCode": 200, "body": "Message part received."}
 
     except Exception as e:
         logger.exception(f"Operation failed: {e}")
