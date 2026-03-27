@@ -378,7 +378,7 @@ def handler(event, context):
                 Key=_chunk_key(connection_id, part_index),
                 Body=message_part,
             )
-            return {"statusCode": 200, "body": "Message part received."}
+            return {"statusCode": 200, "body": json.dumps({"ack": part_index})}
 
     except Exception as e:
         logger.exception(f"Operation failed: {e}")
