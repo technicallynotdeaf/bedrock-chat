@@ -84,10 +84,10 @@ class TestShouldChunkAttachment:
         assert not should_chunk_attachment(att)
 
     def test_medium_attachment_not_chunked(self):
-        # A 500KB file is under the 4.5MB threshold — should NOT be chunked
+        # A 2MB file is under the 2.5MB threshold — should NOT be chunked
         att = AttachmentContentModel(
             content_type="attachment",
-            body=b"x" * 500_000,
+            body=b"x" * 2_000_000,
             file_name="test.txt",
         )
         assert not should_chunk_attachment(att)
@@ -181,25 +181,25 @@ class TestProcessAttachmentsForContextWindow:
         assert isinstance(result[0], TextContentModel)
         assert isinstance(result[1], AttachmentContentModel)
 
-    def test_medium_attachments_pass_through(self):
-        """Documents under 4.5MB should pass through for Bedrock native handling."""
-        medium_content = ("Word " * 200 + "\n\n") * 500  # ~500KB
+    def test_small_attachments_pass_through_unchanged(self):
+        """Documents under 2.5MB should pass through for Bedrock native handling."""
+        small_content = ("Word " * 20 + "\n\n") * 50  # ~5KB
         content = [
             AttachmentContentModel(
                 content_type="attachment",
-                body=medium_content.encode("utf-8"),
+                body=small_content.encode("utf-8"),
                 file_name="report.txt",
             ),
             TextContentModel(content_type="text", body="Summarize this"),
         ]
         result = process_attachments_for_context_window(content)
-        # Should pass through unchanged (under 4.5MB threshold)
+        # Should pass through unchanged (under 500KB threshold)
         assert len(result) == 2
         assert isinstance(result[0], AttachmentContentModel)
         assert isinstance(result[1], TextContentModel)
 
-    def test_oversized_attachment_gets_chunked(self):
-        """Documents over 4.5MB should be text-extracted and chunked."""
+    def test_large_attachment_gets_chunked(self):
+        """Documents over 2.5MB should be text-extracted and chunked."""
         large_content = ("Word " * 200 + "\n\n") * 5000  # ~5MB
         content = [
             AttachmentContentModel(
@@ -216,21 +216,22 @@ class TestProcessAttachmentsForContextWindow:
         assert isinstance(result[-1], TextContentModel)
         assert result[-1].body == "Summarize this"
 
-    def test_mixed_content_only_chunks_oversized(self):
+    def test_mixed_content_only_chunks_large(self):
         small_att = AttachmentContentModel(
             content_type="attachment", body=b"small", file_name="small.txt"
         )
-        medium_content = ("Word " * 200 + "\n\n") * 500  # ~500KB
-        medium_att = AttachmentContentModel(
+        large_content = ("Word " * 200 + "\n\n") * 5000  # ~5MB
+        large_att = AttachmentContentModel(
             content_type="attachment",
-            body=medium_content.encode("utf-8"),
-            file_name="medium.txt",
+            body=large_content.encode("utf-8"),
+            file_name="big.txt",
         )
         text = TextContentModel(content_type="text", body="Analyze both")
-        content = [small_att, medium_att, text]
+        content = [small_att, large_att, text]
         result = process_attachments_for_context_window(content)
-        # Both attachments should pass through unchanged (under 4.5MB)
+        # Small attachment should pass through unchanged
         assert result[0] is small_att
-        assert result[1] is medium_att
-        assert result[2] is text
-        assert len(result) == 3
+        # Last should be the text
+        assert result[-1] is text
+        # Large attachment should be chunked into text blocks
+        assert len(result) > 3
