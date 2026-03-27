@@ -31,10 +31,11 @@ MAX_DOCUMENT_TOKENS = 80_000
 MAX_DOCUMENT_CHARS = MAX_DOCUMENT_TOKENS * CHARS_PER_TOKEN  # 320,000 chars
 
 # Size threshold in bytes: documents larger than this are candidates for chunking.
-# Bedrock has a 4.5MB per-document limit. Documents under this can be sent natively.
-# If a natively-sent document exceeds the context window, the retry loop in chat.py
-# will catch the error and apply chunking as a fallback.
-LARGE_DOCUMENT_THRESHOLD_BYTES = 4_500_000  # 4.5MB (Bedrock's hard limit)
+# A 500KB text-dense document can tokenize to ~125K tokens, which risks exceeding
+# the model's 200K context window. Documents under this are sent to Bedrock natively.
+# If extraction fails for a supported format, the original attachment is returned
+# for Bedrock to handle (as long as it's under 4.5MB).
+LARGE_DOCUMENT_THRESHOLD_BYTES = 500_000  # 500KB
 
 # Chunk size in characters for splitting extracted text.
 CHUNK_SIZE_CHARS = 50_000  # ~12,500 tokens per chunk
