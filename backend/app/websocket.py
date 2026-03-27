@@ -7,6 +7,7 @@ from threading import Thread
 from typing import BinaryIO, Literal, TypedDict
 
 import boto3
+from botocore.exceptions import ClientError
 from app.agents.tools.agent_tool import ToolRunResult
 from app.auth import verify_token
 from app.repositories.conversation import RecordNotFoundError
@@ -291,13 +292,12 @@ def handler(event, context):
         step = body.get("step")
         token = body.get("token")
 
-        # API Gateway (websocket) has a hard limit of 32KB per message, so if the message
-        # is larger than that we chunk it client-side and reassemble here.
-        # Life cycle:
-        # 1. Client sends START  → Lambda stores session metadata in S3.
-        # 2. Client sends BODY chunks  → Lambda stores each chunk as an S3 object.
-        # 3. Client sends END  → Lambda reads + concatenates all chunks from S3,
+        # Large-payload protocol:
+        # 1. Client sends START  → Lambda returns a pre-signed S3 upload URL.
+        # 2. Client PUTs payload directly to S3 via the pre-signed URL.
+        # 3. Client sends END  → Lambda reads payload from S3,
         #                        calls Bedrock, streams response back.
+        # (Legacy chunked BODY protocol is still supported as a fallback.)
         if step == "START":
             try:
                 decoded = verify_token(token)
@@ -315,7 +315,23 @@ def handler(event, context):
                 Key=_session_key(connection_id),
                 Body=json.dumps({"user_id": user_id}),
             )
-            return {"statusCode": 200, "body": "Session started."}
+
+            # Generate a pre-signed URL so the client can upload the full
+            # payload directly to S3, bypassing WebSocket chunk limits.
+            upload_key = f"{_chunk_prefix(connection_id)}payload"
+            presigned_url = s3_client.generate_presigned_url(
+                "put_object",
+                Params={
+                    "Bucket": LARGE_PAYLOAD_SUPPORT_BUCKET,
+                    "Key": upload_key,
+                },
+                ExpiresIn=300,  # 5 minutes
+            )
+
+            return {
+                "statusCode": 200,
+                "body": json.dumps({"uploadUrl": presigned_url}),
+            }
 
         elif step == "END":
             decoded = verify_token(token)
@@ -329,62 +345,77 @@ def handler(event, context):
             session_data = json.loads(session_obj["Body"].read())
             user_id = session_data["user_id"]  # noqa: F841 – kept for audit / future use
 
-            # List all chunk objects (excludes session.json via prefix filtering)
-            # Use paginator to handle >1000 chunks safely.
-            chunk_prefix = _chunk_prefix(connection_id)
-            paginator = s3_client.get_paginator("list_objects_v2")
-            all_objects = []
-            for page in paginator.paginate(
-                Bucket=LARGE_PAYLOAD_SUPPORT_BUCKET, Prefix=chunk_prefix
-            ):
-                for obj in page.get("Contents", []):
-                    if not obj["Key"].endswith("session.json"):
-                        all_objects.append(obj)
-            chunk_objects = sorted(all_objects, key=lambda obj: obj["Key"])
-
-            logger.info(f"Number of message chunks: {len(chunk_objects)}")
-
-            if not chunk_objects:
-                raise ValueError("No message chunks found — nothing was uploaded.")
-
-            # Verify chunk indices are sequential (0, 1, 2, ..., N-1).
-            # Extract indices from the zero-padded S3 key suffix.
-            expected_prefix = _chunk_prefix(connection_id)
-            received_indices = []
-            for obj in chunk_objects:
-                suffix = obj["Key"][len(expected_prefix):]
-                try:
-                    received_indices.append(int(suffix))
-                except ValueError:
-                    logger.warning(f"Unexpected S3 key format: {obj['Key']}")
-            expected_indices = list(range(len(chunk_objects)))
-            if received_indices != expected_indices:
-                missing = set(expected_indices) - set(received_indices)
-                logger.error(
-                    f"Chunk index mismatch: expected {expected_indices}, "
-                    f"got {received_indices}, missing {missing}"
+            # Try reading the direct S3 upload (new protocol) first.
+            # Falls back to chunk assembly if the payload key doesn't exist.
+            payload_key = f"{_chunk_prefix(connection_id)}payload"
+            full_message = None
+            try:
+                payload_obj = s3_client.get_object(
+                    Bucket=LARGE_PAYLOAD_SUPPORT_BUCKET, Key=payload_key
                 )
-                raise ValueError(
-                    f"Upload incomplete: {len(missing)} chunk(s) missing. "
-                    f"Please try uploading again."
+                full_message = payload_obj["Body"].read().decode("utf-8")
+                logger.info(
+                    f"Read direct upload payload: {len(full_message):,} chars"
                 )
+            except ClientError as e:
+                if e.response["Error"]["Code"] == "NoSuchKey":
+                    logger.info("No direct upload found, falling back to chunk assembly")
+                else:
+                    raise
 
-            # Read all chunks in parallel
-            def _read_chunk(obj: dict) -> str:
-                resp = s3_client.get_object(
-                    Bucket=LARGE_PAYLOAD_SUPPORT_BUCKET, Key=obj["Key"]
-                )
-                return resp["Body"].read().decode("utf-8")
+            if full_message is None:
+                # Fallback: assemble from chunked BODY uploads (old protocol)
+                chunk_prefix = _chunk_prefix(connection_id)
+                paginator = s3_client.get_paginator("list_objects_v2")
+                all_objects = []
+                for page in paginator.paginate(
+                    Bucket=LARGE_PAYLOAD_SUPPORT_BUCKET, Prefix=chunk_prefix
+                ):
+                    for obj in page.get("Contents", []):
+                        key = obj["Key"]
+                        if not key.endswith("session.json") and not key.endswith("payload"):
+                            all_objects.append(obj)
+                chunk_objects = sorted(all_objects, key=lambda obj: obj["Key"])
 
-            with ThreadPoolExecutor(max_workers=max(1, min(len(chunk_objects), 20))) as executor:
-                chunks = list(executor.map(_read_chunk, chunk_objects))
+                logger.info(f"Number of message chunks: {len(chunk_objects)}")
 
-            full_message = "".join(chunks)
+                if not chunk_objects:
+                    raise ValueError("No message found — nothing was uploaded.")
+
+                expected_prefix = _chunk_prefix(connection_id)
+                received_indices = []
+                for obj in chunk_objects:
+                    suffix = obj["Key"][len(expected_prefix):]
+                    try:
+                        received_indices.append(int(suffix))
+                    except ValueError:
+                        logger.warning(f"Unexpected S3 key format: {obj['Key']}")
+                expected_indices = list(range(len(chunk_objects)))
+                if received_indices != expected_indices:
+                    missing = set(expected_indices) - set(received_indices)
+                    logger.error(
+                        f"Chunk index mismatch: expected {expected_indices}, "
+                        f"got {received_indices}, missing {missing}"
+                    )
+                    raise ValueError(
+                        f"Upload incomplete: {len(missing)} chunk(s) missing. "
+                        f"Please try uploading again."
+                    )
+
+                def _read_chunk(obj: dict) -> str:
+                    resp = s3_client.get_object(
+                        Bucket=LARGE_PAYLOAD_SUPPORT_BUCKET, Key=obj["Key"]
+                    )
+                    return resp["Body"].read().decode("utf-8")
+
+                with ThreadPoolExecutor(max_workers=max(1, min(len(chunk_objects), 20))) as executor:
+                    chunks = list(executor.map(_read_chunk, chunk_objects))
+
+                full_message = "".join(chunks)
 
             chat_input = ChatInput(**json.loads(full_message))
 
-            # Clean up S3 objects after successful parsing so they can be
-            # inspected if parsing fails
+            # Clean up S3 objects after successful parsing
             _cleanup_s3_chunks(connection_id)
 
             return process_chat_input(
