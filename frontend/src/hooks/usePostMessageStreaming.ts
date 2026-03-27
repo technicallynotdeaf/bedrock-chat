@@ -12,7 +12,7 @@ const CHUNK_SIZE = 100 * 1024; // 100KB
 // Max chunks to send in parallel before waiting for acks.
 // Keeps concurrent Lambda invocations low to avoid throttling.
 const CHUNK_BATCH_SIZE = 5;
-// Number of times to retry a failed chunk batch before giving up.
+// Number of times to retry a failed chunk before giving up.
 const MAX_CHUNK_RETRIES = 3;
 // Delay between retries in milliseconds.
 const CHUNK_RETRY_DELAY_MS = 2000;
@@ -45,25 +45,20 @@ const usePostMessageStreaming = create<{
         chunkedPayloads.push(payloadString.substring(start, end));
       }
 
-      let receivedCount = 0;
+      // Track which chunk indices have been acknowledged.
+      // This allows accurate retry logic without double-counting.
+      const ackedChunks = new Set<number>();
       let nextBatchStart = 0;
-      // Track errors during BODY chunk delivery so we can retry the batch.
-      let chunkErrors = 0;
-      let chunkRetryCount = 0;
       // true once all chunks are acked and END has been sent
       let chunkingComplete = false;
+      // Track retry attempts per chunk index
+      const chunkRetries = new Map<number, number>();
 
-      const sendNextBatch = (ws: WebSocket) => {
-        if (nextBatchStart >= chunkedPayloads.length) return;
-        const batchEnd = Math.min(
-          nextBatchStart + CHUNK_BATCH_SIZE,
-          chunkedPayloads.length
-        );
+      const sendChunks = (ws: WebSocket, indices: number[]) => {
         console.log(
-          `[FRONTEND_WS] Sending chunk batch ${nextBatchStart}-${batchEnd - 1} of ${chunkedPayloads.length}`
+          `[FRONTEND_WS] Sending chunks [${indices.join(',')}] of ${chunkedPayloads.length}`
         );
-        chunkErrors = 0;
-        for (let i = nextBatchStart; i < batchEnd; i++) {
+        for (const i of indices) {
           ws.send(
             JSON.stringify({
               step: PostStreamingStatus.BODY,
@@ -74,30 +69,103 @@ const usePostMessageStreaming = create<{
         }
       };
 
-      const retryCurrentBatch = (ws: WebSocket) => {
-        chunkRetryCount++;
-        if (chunkRetryCount > MAX_CHUNK_RETRIES) {
-          return false; // Give up
+      const sendNextBatch = (ws: WebSocket) => {
+        if (nextBatchStart >= chunkedPayloads.length) return;
+        const batchEnd = Math.min(
+          nextBatchStart + CHUNK_BATCH_SIZE,
+          chunkedPayloads.length
+        );
+        const indices = [];
+        for (let i = nextBatchStart; i < batchEnd; i++) {
+          indices.push(i);
         }
-        console.log(
-          `[FRONTEND_WS] Retrying chunk batch (attempt ${chunkRetryCount}/${MAX_CHUNK_RETRIES}) ` +
-            `after ${CHUNK_RETRY_DELAY_MS}ms delay`
+        nextBatchStart = batchEnd;
+        sendChunks(ws, indices);
+      };
+
+      const checkAllAcked = (ws: WebSocket) => {
+        if (ackedChunks.size === chunkedPayloads.length) {
+          chunkingComplete = true;
+          console.log(
+            `[FRONTEND_WS] All ${chunkedPayloads.length} chunks acknowledged — sending END`
+          );
+          ws.send(
+            JSON.stringify({
+              step: PostStreamingStatus.END,
+              token: token,
+            })
+          );
+          return true;
+        }
+        return false;
+      };
+
+      // Handle a successful ack for a specific chunk index
+      const handleAck = (ws: WebSocket, index: number) => {
+        ackedChunks.add(index);
+        if (checkAllAcked(ws)) return;
+        // If all chunks in the current batch are acked, send next batch
+        if (ackedChunks.size >= nextBatchStart) {
+          sendNextBatch(ws);
+        }
+      };
+
+      // Handle a failed chunk: retry the specific index
+      const handleChunkFailure = (ws: WebSocket, failedIndex: number, detail: string) => {
+        const retries = (chunkRetries.get(failedIndex) || 0) + 1;
+        chunkRetries.set(failedIndex, retries);
+        console.warn(
+          `[FRONTEND_WS] Chunk ${failedIndex} failed: ${detail} ` +
+            `(retry ${retries}/${MAX_CHUNK_RETRIES}, ` +
+            `${ackedChunks.size}/${chunkedPayloads.length} acked)`
         );
-        // Reset the batch to re-send from the current nextBatchStart position.
-        // receivedCount stays as-is (acks from earlier batches are preserved).
-        // Move nextBatchStart back to where the failed batch started.
-        const batchSize = Math.min(
-          CHUNK_BATCH_SIZE,
-          chunkedPayloads.length - nextBatchStart + CHUNK_BATCH_SIZE
-        );
-        nextBatchStart = receivedCount; // Re-send from the first un-acked chunk
+        if (retries > MAX_CHUNK_RETRIES) {
+          throw new Error(
+            'Failed to upload document after multiple retries. ' +
+              'The file may be too large. Please try a smaller document.'
+          );
+        }
         setTimeout(() => {
           if (ws.readyState === WebSocket.OPEN) {
-            sendNextBatch(ws);
-            nextBatchStart = receivedCount + batchSize;
+            sendChunks(ws, [failedIndex]);
           }
         }, CHUNK_RETRY_DELAY_MS);
-        return true;
+      };
+
+      // When we get an error but don't know which chunk it belongs to,
+      // find the un-acked chunks in the current batch and retry them.
+      let unknownErrorCount = 0;
+      const handleUnknownChunkFailure = (ws: WebSocket, detail: string) => {
+        unknownErrorCount++;
+        // Find un-acked chunks that have been sent
+        const unacked: number[] = [];
+        for (let i = 0; i < nextBatchStart; i++) {
+          if (!ackedChunks.has(i)) unacked.push(i);
+        }
+        console.warn(
+          `[FRONTEND_WS] Unknown chunk failure: ${detail} ` +
+            `(${unknownErrorCount} unknown errors, ` +
+            `${unacked.length} un-acked chunks: [${unacked.join(',')}])`
+        );
+        // Wait a bit then retry all un-acked chunks
+        if (unacked.length > 0 && unknownErrorCount <= MAX_CHUNK_RETRIES * unacked.length) {
+          setTimeout(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              // Only retry chunks that still haven't been acked
+              const stillUnacked = unacked.filter((i) => !ackedChunks.has(i));
+              if (stillUnacked.length > 0) {
+                sendChunks(ws, stillUnacked);
+              } else if (!chunkingComplete) {
+                checkAllAcked(ws);
+              }
+            }
+          }, CHUNK_RETRY_DELAY_MS);
+        } else if (unknownErrorCount > MAX_CHUNK_RETRIES * Math.max(unacked.length, 1)) {
+          throw new Error(
+            'Failed to upload document after multiple retries. ' +
+              'The file may be too large. Please try a smaller document.'
+          );
+        }
       };
 
       return new Promise<void>((resolve, reject) => {
@@ -129,90 +197,40 @@ const usePostMessageStreaming = create<{
               sendNextBatch(ws);
               return;
             } else if (message.data === 'Message part received.') {
-              receivedCount++;
-              chunkRetryCount = 0; // Reset retry count on successful ack
-              if (receivedCount === chunkedPayloads.length) {
-                // All chunks acknowledged — send END
-                chunkingComplete = true;
-                ws.send(
-                  JSON.stringify({
-                    step: PostStreamingStatus.END,
-                    token: token,
-                  })
-                );
-              } else if (receivedCount >= nextBatchStart) {
-                // Current batch fully acked — send next batch
-                sendNextBatch(ws);
-                nextBatchStart = Math.min(
-                  nextBatchStart + CHUNK_BATCH_SIZE,
-                  chunkedPayloads.length
-                );
-              }
+              // Legacy ack format (no index) — count it like before
+              // This handles the case where backend hasn't been updated yet
+              handleAck(ws, ackedChunks.size);
               return;
-            } else if (message.data === 'Error.') {
-              // A BODY chunk Lambda failed. Count the error and
-              // decide whether to retry when the batch completes.
+            } else if (message.data === 'Error.' && !chunkingComplete) {
+              handleUnknownChunkFailure(ws, 'Lambda returned Error');
+              return;
+            }
+
+            // Try to parse as JSON
+            let data;
+            try {
+              data = JSON.parse(message.data);
+            } catch {
+              // Non-JSON message during chunking — treat as chunk error
               if (!chunkingComplete) {
-                chunkErrors++;
-                console.warn(
-                  `[FRONTEND_WS] Chunk error (${chunkErrors} in current batch). ` +
-                    `Received ${receivedCount}/${chunkedPayloads.length} acks so far.`
-                );
-                // Check if the whole batch has responded (acks + errors)
-                const batchEnd = Math.min(
-                  nextBatchStart,
-                  chunkedPayloads.length
-                );
-                const batchResponses = receivedCount + chunkErrors;
-                if (
-                  batchResponses >= batchEnd &&
-                  receivedCount < chunkedPayloads.length
-                ) {
-                  // Batch complete but had errors — retry
-                  if (!retryCurrentBatch(ws)) {
-                    throw new Error(
-                      'Failed to upload document after multiple retries. ' +
-                        'The file may be too large. Please try a smaller document.'
-                    );
-                  }
-                }
+                handleUnknownChunkFailure(ws, message.data);
                 return;
               }
-              // If chunking is complete, an "Error." during processing falls through
+              throw new Error(i18next.t('error.predict.invalidResponse'));
+            }
+
+            // Handle indexed ack: {"ack": <index>}
+            if (data.ack !== undefined && !chunkingComplete) {
+              handleAck(ws, data.ack);
               return;
             }
 
             // Handle API Gateway error messages during chunk delivery
-            // (e.g. Lambda throttling returns {"message": "Internal server error"})
-            if (
-              !chunkingComplete &&
-              message.data.startsWith('{"message":')
-            ) {
-              chunkErrors++;
-              console.warn(
-                `[FRONTEND_WS] API Gateway error during chunking: ${message.data}. ` +
-                  `Treating as chunk failure (${chunkErrors} errors).`
-              );
-              const batchEnd = Math.min(
-                nextBatchStart,
-                chunkedPayloads.length
-              );
-              const batchResponses = receivedCount + chunkErrors;
-              if (
-                batchResponses >= batchEnd &&
-                receivedCount < chunkedPayloads.length
-              ) {
-                if (!retryCurrentBatch(ws)) {
-                  throw new Error(
-                    'Failed to upload document after multiple retries. ' +
-                      'The file may be too large. Please try a smaller document.'
-                  );
-                }
-              }
+            if (!chunkingComplete && data.message && !data.status) {
+              handleUnknownChunkFailure(ws, data.message);
               return;
             }
 
-            const data = JSON.parse(message.data);
             console.log('[FRONTEND_WS] Parsed data:', data);
 
             if (data.status) {
