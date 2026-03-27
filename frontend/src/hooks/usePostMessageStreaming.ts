@@ -6,10 +6,13 @@ import { StreamingEvent } from './xstates/streaming';
 import { PostStreamingStatus } from '../constants';
 
 const WS_ENDPOINT: string = import.meta.env.VITE_APP_WS_ENDPOINT;
-const CHUNK_SIZE = 32 * 1024; //32KB
+// API Gateway WebSocket supports up to 128KB per message. The browser
+// handles frame fragmentation transparently. Use 100KB to leave room
+// for the JSON wrapper (step, index, quotes/escaping).
+const CHUNK_SIZE = 100 * 1024; // 100KB
 // Max chunks to send in parallel before waiting for acks.
 // Keeps concurrent Lambda invocations low to avoid throttling.
-const CHUNK_BATCH_SIZE = 10;
+const CHUNK_BATCH_SIZE = 5;
 
 const usePostMessageStreaming = create<{
   post: (params: {
