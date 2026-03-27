@@ -84,10 +84,10 @@ class TestShouldChunkAttachment:
         assert not should_chunk_attachment(att)
 
     def test_medium_attachment_not_chunked(self):
-        # A 200KB file is under the 500KB threshold — should NOT be chunked
+        # A 2MB file is under the 2.5MB threshold — should NOT be chunked
         att = AttachmentContentModel(
             content_type="attachment",
-            body=b"x" * 200_000,
+            body=b"x" * 2_000_000,
             file_name="test.txt",
         )
         assert not should_chunk_attachment(att)
@@ -182,7 +182,7 @@ class TestProcessAttachmentsForContextWindow:
         assert isinstance(result[1], AttachmentContentModel)
 
     def test_small_attachments_pass_through_unchanged(self):
-        """Documents under 500KB should pass through for Bedrock native handling."""
+        """Documents under 2.5MB should pass through for Bedrock native handling."""
         small_content = ("Word " * 20 + "\n\n") * 50  # ~5KB
         content = [
             AttachmentContentModel(
@@ -199,8 +199,8 @@ class TestProcessAttachmentsForContextWindow:
         assert isinstance(result[1], TextContentModel)
 
     def test_large_attachment_gets_chunked(self):
-        """Documents over 500KB should be text-extracted and chunked."""
-        large_content = ("Word " * 200 + "\n\n") * 1000  # ~1MB
+        """Documents over 2.5MB should be text-extracted and chunked."""
+        large_content = ("Word " * 200 + "\n\n") * 5000  # ~5MB
         content = [
             AttachmentContentModel(
                 content_type="attachment",
@@ -220,7 +220,7 @@ class TestProcessAttachmentsForContextWindow:
         small_att = AttachmentContentModel(
             content_type="attachment", body=b"small", file_name="small.txt"
         )
-        large_content = ("Word " * 200 + "\n\n") * 1000  # ~1MB
+        large_content = ("Word " * 200 + "\n\n") * 5000  # ~5MB
         large_att = AttachmentContentModel(
             content_type="attachment",
             body=large_content.encode("utf-8"),

@@ -31,11 +31,11 @@ MAX_DOCUMENT_TOKENS = 80_000
 MAX_DOCUMENT_CHARS = MAX_DOCUMENT_TOKENS * CHARS_PER_TOKEN  # 320,000 chars
 
 # Size threshold in bytes: documents larger than this are candidates for chunking.
-# A 500KB text-dense document can tokenize to ~125K tokens, which risks exceeding
-# the model's 200K context window. Documents under this are sent to Bedrock natively.
-# If extraction fails for a supported format, the original attachment is returned
+# Documents around 2.5MB pass through Bedrock natively without issues.
+# Larger documents risk exceeding the model's 200K context window when Bedrock
+# extracts their text. If extraction fails, the original attachment is returned
 # for Bedrock to handle (as long as it's under 4.5MB).
-LARGE_DOCUMENT_THRESHOLD_BYTES = 500_000  # 500KB
+LARGE_DOCUMENT_THRESHOLD_BYTES = 2_500_000  # 2.5MB
 
 # Chunk size in characters for splitting extracted text.
 CHUNK_SIZE_CHARS = 50_000  # ~12,500 tokens per chunk
