@@ -51,8 +51,12 @@ const usePostMessageStreaming = create<{
       let nextBatchStart = 0;
       // true once all chunks are acked and END has been sent
       let chunkingComplete = false;
+      // true once the promise has been settled (resolved or rejected)
+      let settled = false;
       // Track retry attempts per chunk index
       const chunkRetries = new Map<number, number>();
+      // Track pending retry timers per chunk to prevent duplicate retries
+      const pendingRetries = new Set<number>();
 
       const sendChunks = (ws: WebSocket, indices: number[]) => {
         console.log(
@@ -103,6 +107,7 @@ const usePostMessageStreaming = create<{
       // Handle a successful ack for a specific chunk index
       const handleAck = (ws: WebSocket, index: number) => {
         ackedChunks.add(index);
+        pendingRetries.delete(index);
         if (checkAllAcked(ws)) return;
         // If all chunks in the current batch are acked, send next batch
         if (ackedChunks.size >= nextBatchStart) {
@@ -110,27 +115,33 @@ const usePostMessageStreaming = create<{
         }
       };
 
-      // Handle a failed chunk: retry the specific index
-      const handleChunkFailure = (ws: WebSocket, failedIndex: number, detail: string) => {
-        const retries = (chunkRetries.get(failedIndex) || 0) + 1;
-        chunkRetries.set(failedIndex, retries);
-        console.warn(
-          `[FRONTEND_WS] Chunk ${failedIndex} failed: ${detail} ` +
-            `(retry ${retries}/${MAX_CHUNK_RETRIES}, ` +
-            `${ackedChunks.size}/${chunkedPayloads.length} acked)`
-        );
-        if (retries > MAX_CHUNK_RETRIES) {
-          throw new Error(
-            'Failed to upload document after multiple retries. ' +
-              'The file may be too large. Please try a smaller document.'
-          );
-        }
+      // Schedule a retry for a chunk, guarding against WS close and duplicates.
+      // Calls rejectFn if the WebSocket closes before retry can fire.
+      const scheduleRetry = (
+        ws: WebSocket,
+        index: number,
+        rejectFn: (reason: string) => void
+      ) => {
+        if (pendingRetries.has(index)) return; // already scheduled
+        pendingRetries.add(index);
         setTimeout(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            sendChunks(ws, [failedIndex]);
+          pendingRetries.delete(index);
+          if (settled) return;
+          if (ws.readyState !== WebSocket.OPEN) {
+            // WS closed during retry delay — reject so the promise doesn't hang
+            rejectFn(
+              'Connection lost while uploading document. Please try again.'
+            );
+            return;
+          }
+          // Only retry if still un-acked
+          if (!ackedChunks.has(index)) {
+            sendChunks(ws, [index]);
           }
         }, CHUNK_RETRY_DELAY_MS);
       };
+
+      let rejectPromise: ((reason: string) => void) | null = null;
 
       // When we get an error but don't know which chunk it belongs to,
       // find the un-acked chunks in the current batch and retry them.
@@ -149,17 +160,11 @@ const usePostMessageStreaming = create<{
         );
         // Wait a bit then retry all un-acked chunks
         if (unacked.length > 0 && unknownErrorCount <= MAX_CHUNK_RETRIES * unacked.length) {
-          setTimeout(() => {
-            if (ws.readyState === WebSocket.OPEN) {
-              // Only retry chunks that still haven't been acked
-              const stillUnacked = unacked.filter((i) => !ackedChunks.has(i));
-              if (stillUnacked.length > 0) {
-                sendChunks(ws, stillUnacked);
-              } else if (!chunkingComplete) {
-                checkAllAcked(ws);
-              }
-            }
-          }, CHUNK_RETRY_DELAY_MS);
+          for (const i of unacked) {
+            // Bump per-chunk retry count for unknown errors too
+            chunkRetries.set(i, (chunkRetries.get(i) || 0) + 1);
+            scheduleRetry(ws, i, rejectPromise!);
+          }
         } else if (unknownErrorCount > MAX_CHUNK_RETRIES * Math.max(unacked.length, 1)) {
           throw new Error(
             'Failed to upload document after multiple retries. ' +
@@ -169,6 +174,12 @@ const usePostMessageStreaming = create<{
       };
 
       return new Promise<void>((resolve, reject) => {
+        rejectPromise = (reason: string) => {
+          if (!settled) {
+            settled = true;
+            reject(reason);
+          }
+        };
         const ws = new WebSocket(WS_ENDPOINT);
 
         ws.onopen = () => {
@@ -206,11 +217,6 @@ const usePostMessageStreaming = create<{
               } else {
                 sendNextBatch(ws);
               }
-              return;
-            } else if (message.data === 'Message part received.') {
-              // Legacy ack format (no index) — count it like before
-              // This handles the case where backend hasn't been updated yet
-              handleAck(ws, ackedChunks.size);
               return;
             } else if (message.data === 'Error.' && !chunkingComplete) {
               handleUnknownChunkFailure(ws, 'Lambda returned Error');
@@ -341,14 +347,20 @@ const usePostMessageStreaming = create<{
               '[FRONTEND_WS] Message data that caused error:',
               message.data
             );
-            reject(i18next.t('error.predict.general'));
+            if (!settled) {
+              settled = true;
+              reject(i18next.t('error.predict.general'));
+            }
           }
         };
 
         ws.onerror = (e) => {
           console.error('[FRONTEND_WS] WebSocket error:', e);
           ws.close();
-          reject(i18next.t('error.predict.general'));
+          if (!settled) {
+            settled = true;
+            reject(i18next.t('error.predict.general'));
+          }
         };
         ws.onclose = (event) => {
           console.log(
@@ -356,7 +368,10 @@ const usePostMessageStreaming = create<{
             event.code,
             event.reason
           );
-          resolve();
+          if (!settled) {
+            settled = true;
+            resolve();
+          }
         };
       });
     },
