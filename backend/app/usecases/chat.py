@@ -712,6 +712,33 @@ def chat(
                             )
                             continue
 
+                        # No attachments found — try truncating large text
+                        # blocks (e.g. from prior chunking) as a last resort
+                        truncated = False
+                        truncated_content: list = []
+                        for c in last_user.content:
+                            if (
+                                isinstance(c, TextContentModel)
+                                and len(c.body) > reduced_limit
+                            ):
+                                truncated = True
+                                truncated_content.append(
+                                    TextContentModel(
+                                        content_type="text",
+                                        body=c.body[:reduced_limit]
+                                        + "\n\n[Content truncated to fit context window]",
+                                    )
+                                )
+                            else:
+                                truncated_content.append(c)
+                        if truncated:
+                            last_user.content = truncated_content
+                            logger.info(
+                                "Truncated large text blocks after "
+                                "trim exhaustion"
+                            )
+                            continue
+
                     # No attachments to chunk — re-raise original error
                     raise e
             else:
