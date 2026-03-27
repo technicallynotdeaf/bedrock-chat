@@ -358,10 +358,12 @@ def handler(event, context):
 
             full_message = "".join(chunks)
 
-            # Clean up S3 objects before processing so they don't linger
+            chat_input = ChatInput(**json.loads(full_message))
+
+            # Clean up S3 objects after successful parsing so they can be
+            # inspected if parsing fails
             _cleanup_s3_chunks(connection_id)
 
-            chat_input = ChatInput(**json.loads(full_message))
             return process_chat_input(
                 user=user,
                 chat_input=chat_input,

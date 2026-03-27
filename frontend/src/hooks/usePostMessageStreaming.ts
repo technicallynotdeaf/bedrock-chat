@@ -194,7 +194,18 @@ const usePostMessageStreaming = create<{
             ) {
               return;
             } else if (message.data === 'Session started.') {
-              sendNextBatch(ws);
+              if (chunkedPayloads.length === 0) {
+                // Empty payload — skip straight to END
+                chunkingComplete = true;
+                ws.send(
+                  JSON.stringify({
+                    step: PostStreamingStatus.END,
+                    token: token,
+                  })
+                );
+              } else {
+                sendNextBatch(ws);
+              }
               return;
             } else if (message.data === 'Message part received.') {
               // Legacy ack format (no index) — count it like before
