@@ -346,6 +346,31 @@ def handler(event, context):
 
             logger.info(f"Number of message chunks: {len(chunk_objects)}")
 
+            if not chunk_objects:
+                raise ValueError("No message chunks found — nothing was uploaded.")
+
+            # Verify chunk indices are sequential (0, 1, 2, ..., N-1).
+            # Extract indices from the zero-padded S3 key suffix.
+            expected_prefix = _chunk_prefix(connection_id)
+            received_indices = []
+            for obj in chunk_objects:
+                suffix = obj["Key"][len(expected_prefix):]
+                try:
+                    received_indices.append(int(suffix))
+                except ValueError:
+                    logger.warning(f"Unexpected S3 key format: {obj['Key']}")
+            expected_indices = list(range(len(chunk_objects)))
+            if received_indices != expected_indices:
+                missing = set(expected_indices) - set(received_indices)
+                logger.error(
+                    f"Chunk index mismatch: expected {expected_indices}, "
+                    f"got {received_indices}, missing {missing}"
+                )
+                raise ValueError(
+                    f"Upload incomplete: {len(missing)} chunk(s) missing. "
+                    f"Please try uploading again."
+                )
+
             # Read all chunks in parallel
             def _read_chunk(obj: dict) -> str:
                 resp = s3_client.get_object(
@@ -374,6 +399,11 @@ def handler(event, context):
             # BODY step — store this chunk as an S3 object
             part_index = body["index"]
             message_part = body["part"]
+
+            # Validate chunk index to prevent abuse (e.g. huge indices filling S3)
+            if not isinstance(part_index, int) or part_index < 0 or part_index > 10_000:
+                logger.warning(f"Invalid chunk index: {part_index}")
+                return {"statusCode": 200, "body": "Error."}
 
             s3_client.put_object(
                 Bucket=LARGE_PAYLOAD_SUPPORT_BUCKET,
