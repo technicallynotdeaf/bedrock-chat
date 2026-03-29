@@ -6,6 +6,7 @@ import { StreamingEvent } from './xstates/streaming';
 import { PostStreamingStatus } from '../constants';
 
 const WS_ENDPOINT: string = import.meta.env.VITE_APP_WS_ENDPOINT;
+const CHUNK_SIZE = 32 * 1024; // 32KB per WebSocket message
 
 const usePostMessageStreaming = create<{
   post: (params: {
@@ -23,9 +24,43 @@ const usePostMessageStreaming = create<{
       const token = (await fetchAuthSession()).tokens?.idToken?.toString();
       const payloadString = JSON.stringify({ ...input, token });
 
+      // Pre-split payload into chunks for the WebSocket fallback path.
+      const chunkedPayloads: string[] = [];
+      const chunkCount = Math.ceil(payloadString.length / CHUNK_SIZE);
+      for (let i = 0; i < chunkCount; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, payloadString.length);
+        chunkedPayloads.push(payloadString.substring(start, end));
+      }
+
       return new Promise<void>((resolve, reject) => {
         const ws = new WebSocket(WS_ENDPOINT);
-        let uploadStarted = false;
+        let uploadComplete = false;
+        // For sequential chunk fallback
+        let chunkIndex = 0;
+        let chunkAckCount = 0;
+
+        const sendNextChunk = () => {
+          if (chunkIndex < chunkedPayloads.length) {
+            ws.send(
+              JSON.stringify({
+                step: PostStreamingStatus.BODY,
+                index: chunkIndex,
+                part: chunkedPayloads[chunkIndex],
+              })
+            );
+            chunkIndex++;
+          }
+        };
+
+        const startSequentialChunking = () => {
+          console.log(
+            `[WS] Starting sequential chunk upload: ${chunkedPayloads.length} chunks`
+          );
+          chunkIndex = 0;
+          chunkAckCount = 0;
+          sendNextChunk();
+        };
 
         ws.onopen = () => {
           ws.send(
@@ -41,11 +76,28 @@ const usePostMessageStreaming = create<{
             if (
               message.data === '' ||
               message.data === 'Message sent.' ||
-              message.data === 'Message part received.' ||
               message.data.startsWith(
                 '{"message": "Endpoint request timed out",'
               )
             ) {
+              return;
+            }
+
+            // Handle chunk ack — send next chunk sequentially
+            if (message.data === 'Message part received.') {
+              chunkAckCount++;
+              if (chunkAckCount === chunkedPayloads.length) {
+                // All chunks uploaded — send END
+                uploadComplete = true;
+                ws.send(
+                  JSON.stringify({
+                    step: PostStreamingStatus.END,
+                    token: token,
+                  })
+                );
+              } else {
+                sendNextChunk();
+              }
               return;
             }
 
@@ -54,21 +106,36 @@ const usePostMessageStreaming = create<{
             try {
               data = JSON.parse(message.data);
             } catch {
+              // During chunking, non-JSON responses (e.g. "Error.") for a
+              // single chunk can be retried by re-sending that chunk.
+              if (!uploadComplete) {
+                console.warn(
+                  `[WS] Non-JSON during chunking, resending chunk ${chunkIndex - 1}:`,
+                  message.data
+                );
+                // Back up and resend the last chunk
+                if (chunkIndex > chunkAckCount) {
+                  chunkIndex = chunkAckCount;
+                  setTimeout(() => sendNextChunk(), 500);
+                }
+                return;
+              }
               console.warn('[WS] Unexpected non-JSON message:', message.data);
               return;
             }
 
             // Handle session start with pre-signed upload URL
-            if (data.uploadUrl && !uploadStarted) {
-              uploadStarted = true;
+            if (data.uploadUrl && !uploadComplete) {
+              // Try direct S3 upload first (fast path — 1 HTTP PUT)
               fetch(data.uploadUrl, {
                 method: 'PUT',
                 body: payloadString,
               })
                 .then((resp) => {
                   if (!resp.ok) {
-                    throw new Error(`Upload failed: ${resp.status}`);
+                    throw new Error(`S3 upload returned ${resp.status}`);
                   }
+                  uploadComplete = true;
                   ws.send(
                     JSON.stringify({
                       step: PostStreamingStatus.END,
@@ -77,20 +144,25 @@ const usePostMessageStreaming = create<{
                   );
                 })
                 .catch((err) => {
-                  console.error('[WS] S3 upload failed:', err);
-                  set({
-                    errorDetail:
-                      'Failed to upload document. Please try again.',
-                  });
-                  ws.close();
-                  reject(i18next.t('error.predict.general'));
+                  // S3 upload failed (likely CORS) — fall back to sequential
+                  // WebSocket chunking. Slower but doesn't need CORS.
+                  console.warn(
+                    '[WS] S3 direct upload failed, falling back to chunked upload:',
+                    err
+                  );
+                  startSequentialChunking();
                 });
               return;
             }
 
-            // Handle API Gateway error messages (e.g. throttle, internal error)
-            if (data.message && !data.status) {
-              console.warn('[WS] API Gateway error:', data.message);
+            // Handle API Gateway error messages during chunking
+            if (!uploadComplete && data.message && !data.status) {
+              console.warn('[WS] API Gateway error during chunking:', data.message);
+              // Resend the last unacked chunk
+              if (chunkIndex > chunkAckCount) {
+                chunkIndex = chunkAckCount;
+                setTimeout(() => sendNextChunk(), 500);
+              }
               return;
             }
 
