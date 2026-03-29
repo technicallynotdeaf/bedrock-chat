@@ -15,10 +15,13 @@ const usePostMessageStreaming = create<{
     handleStreamingEvent: (event: StreamingEvent) => void;
   }) => Promise<void>;
   errorDetail: string | null;
+  uploadProgress: number | null; // 0–100 during upload, null when idle
 }>((set) => {
   return {
     errorDetail: null,
+    uploadProgress: null,
     post: async ({ input, handleStreamingEvent }) => {
+      set({ uploadProgress: null });
       handleStreamingEvent({ type: 'wakeup' });
 
       const token = (await fetchAuthSession()).tokens?.idToken?.toString();
@@ -86,9 +89,15 @@ const usePostMessageStreaming = create<{
             // Handle chunk ack — send next chunk sequentially
             if (message.data === 'Message part received.') {
               chunkAckCount++;
+              set({
+                uploadProgress: Math.round(
+                  (chunkAckCount / chunkedPayloads.length) * 100
+                ),
+              });
               if (chunkAckCount === chunkedPayloads.length) {
                 // All chunks uploaded — send END
                 uploadComplete = true;
+                set({ uploadProgress: null });
                 ws.send(
                   JSON.stringify({
                     step: PostStreamingStatus.END,
@@ -126,32 +135,43 @@ const usePostMessageStreaming = create<{
 
             // Handle session start with pre-signed upload URL
             if (data.uploadUrl && !uploadComplete) {
-              // Try direct S3 upload first (fast path — 1 HTTP PUT)
-              fetch(data.uploadUrl, {
-                method: 'PUT',
-                body: payloadString,
-              })
-                .then((resp) => {
-                  if (!resp.ok) {
-                    throw new Error(`S3 upload returned ${resp.status}`);
-                  }
+              set({ uploadProgress: 0 });
+              // Try direct S3 upload with progress tracking
+              const xhr = new XMLHttpRequest();
+              xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable) {
+                  set({ uploadProgress: Math.round((e.loaded / e.total) * 100) });
+                }
+              };
+              xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
                   uploadComplete = true;
+                  set({ uploadProgress: null });
                   ws.send(
                     JSON.stringify({
                       step: PostStreamingStatus.END,
                       token: token,
                     })
                   );
-                })
-                .catch((err) => {
-                  // S3 upload failed (likely CORS) — fall back to sequential
-                  // WebSocket chunking. Slower but doesn't need CORS.
+                } else {
                   console.warn(
-                    '[WS] S3 direct upload failed, falling back to chunked upload:',
-                    err
+                    `[WS] S3 upload returned ${xhr.status}, falling back to chunks`
                   );
+                  set({ uploadProgress: 0 });
                   startSequentialChunking();
-                });
+                }
+              };
+              xhr.onerror = () => {
+                // S3 upload failed (likely CORS) — fall back to sequential
+                // WebSocket chunking. Slower but doesn't need CORS.
+                console.warn(
+                  '[WS] S3 direct upload failed, falling back to chunked upload'
+                );
+                set({ uploadProgress: 0 });
+                startSequentialChunking();
+              };
+              xhr.open('PUT', data.uploadUrl);
+              xhr.send(payloadString);
               return;
             }
 
@@ -237,10 +257,12 @@ const usePostMessageStreaming = create<{
         };
 
         ws.onerror = () => {
+          set({ uploadProgress: null });
           ws.close();
           reject(i18next.t('error.predict.general'));
         };
         ws.onclose = () => {
+          set({ uploadProgress: null });
           resolve();
         };
       });
