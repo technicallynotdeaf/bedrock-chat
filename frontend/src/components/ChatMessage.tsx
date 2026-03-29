@@ -30,6 +30,7 @@ import { convertThinkingLogToAgentToolProps } from '../features/agent/utils/Agen
 import { convertUsedChunkToRelatedDocument } from '../utils/MessageUtils';
 import ReasoningCard from '../features/reasoning/components/ReasoningCard';
 import TypingIndicator from './TypingIndicator';
+import usePostMessageStreaming from '../hooks/usePostMessageStreaming';
 
 type Props = BaseProps & {
   tools?: AgentToolsProps[];
@@ -47,6 +48,7 @@ const ChatMessage: React.FC<Props> = (props) => {
   const [isEdit, setIsEdit] = useState(false);
   const [changedContent, setChangedContent] = useState('');
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
+  const { uploadProgress } = usePostMessageStreaming();
 
   const [firstTextContent, setFirstTextContent] = useState(0);
 
@@ -320,8 +322,24 @@ const ChatMessage: React.FC<Props> = (props) => {
               />
             )}
 
+            {/* Upload progress bar */}
+            {props.isStreaming && uploadProgress !== null && (
+              <div className="flex w-full items-center gap-2 py-2">
+                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
+                  <div
+                    className="h-full rounded-full bg-aws-sea-blue transition-all duration-300"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
+                </div>
+                <span className="shrink-0 text-xs text-aws-font-color-light/60 dark:text-aws-font-color-dark/60">
+                  Uploading {uploadProgress}%
+                </span>
+              </div>
+            )}
+
             {/* Typing indicator while streaming with no content yet */}
             {props.isStreaming &&
+              uploadProgress === null &&
               chatContent!.content.filter((c) => c.contentType === 'text').every(
                 (c) => (c as TextContent).body === ''
               ) && (
