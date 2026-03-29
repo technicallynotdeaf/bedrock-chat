@@ -67,6 +67,15 @@ export class WebSocket extends Construct {
             id: "ExpireWebSocketChunks",
           },
         ],
+        // CORS allows the browser to PUT the payload directly to S3 via
+        // a pre-signed URL, bypassing WebSocket chunk limits entirely.
+        cors: [
+          {
+            allowedMethods: [s3.HttpMethods.PUT],
+            allowedOrigins: ["*"],
+            allowedHeaders: ["*"],
+          },
+        ],
       }
     );
 

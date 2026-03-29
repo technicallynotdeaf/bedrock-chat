@@ -6,13 +6,6 @@ import { StreamingEvent } from './xstates/streaming';
 import { PostStreamingStatus } from '../constants';
 
 const WS_ENDPOINT: string = import.meta.env.VITE_APP_WS_ENDPOINT;
-// API Gateway WebSocket supports up to 128KB per message. The browser
-// handles frame fragmentation transparently. Use 100KB to leave room
-// for the JSON wrapper (step, index, quotes/escaping).
-const CHUNK_SIZE = 100 * 1024; // 100KB
-// Max chunks to send in parallel before waiting for acks.
-// Keeps concurrent Lambda invocations low to avoid throttling.
-const CHUNK_BATCH_SIZE = 5;
 
 const usePostMessageStreaming = create<{
   post: (params: {
@@ -28,49 +21,13 @@ const usePostMessageStreaming = create<{
       handleStreamingEvent({ type: 'wakeup' });
 
       const token = (await fetchAuthSession()).tokens?.idToken?.toString();
-      const payloadString = JSON.stringify({
-        ...input,
-        token,
-      });
-
-      // chunking
-      const chunkedPayloads: string[] = [];
-      const chunkCount = Math.ceil(payloadString.length / CHUNK_SIZE);
-      for (let i = 0; i < chunkCount; i++) {
-        const start = i * CHUNK_SIZE;
-        const end = Math.min(start + CHUNK_SIZE, payloadString.length);
-        chunkedPayloads.push(payloadString.substring(start, end));
-      }
-
-      let receivedCount = 0;
-      let nextBatchStart = 0;
-
-      const sendNextBatch = (ws: WebSocket) => {
-        if (nextBatchStart >= chunkedPayloads.length) return;
-        const batchEnd = Math.min(
-          nextBatchStart + CHUNK_BATCH_SIZE,
-          chunkedPayloads.length
-        );
-        console.log(
-          `[FRONTEND_WS] Sending chunk batch ${nextBatchStart}-${batchEnd - 1} of ${chunkedPayloads.length}`
-        );
-        for (let i = nextBatchStart; i < batchEnd; i++) {
-          ws.send(
-            JSON.stringify({
-              step: PostStreamingStatus.BODY,
-              index: i,
-              part: chunkedPayloads[i],
-            })
-          );
-        }
-        nextBatchStart = batchEnd;
-      };
+      const payloadString = JSON.stringify({ ...input, token });
 
       return new Promise<void>((resolve, reject) => {
         const ws = new WebSocket(WS_ENDPOINT);
+        let uploadStarted = false;
 
         ws.onopen = () => {
-          console.log('[FRONTEND_WS] WebSocket connection opened');
           ws.send(
             JSON.stringify({
               step: PostStreamingStatus.START,
@@ -81,41 +38,64 @@ const usePostMessageStreaming = create<{
 
         ws.onmessage = (message) => {
           try {
-            console.log('[FRONTEND_WS] Received message:', message.data);
             if (
               message.data === '' ||
               message.data === 'Message sent.' ||
-              // Ignore timeout message from api gateway
+              message.data === 'Message part received.' ||
               message.data.startsWith(
                 '{"message": "Endpoint request timed out",'
               )
             ) {
               return;
-            } else if (message.data === 'Session started.') {
-              sendNextBatch(ws);
-              return;
-            } else if (message.data === 'Message part received.') {
-              receivedCount++;
-              if (receivedCount === chunkedPayloads.length) {
-                // All chunks acknowledged — send END
-                ws.send(
-                  JSON.stringify({
-                    step: PostStreamingStatus.END,
-                    token: token,
-                  })
-                );
-              } else if (receivedCount >= nextBatchStart) {
-                // Current batch fully acked — send next batch
-                sendNextBatch(ws);
-              }
+            }
+
+            // Try to parse as JSON
+            let data;
+            try {
+              data = JSON.parse(message.data);
+            } catch {
+              console.warn('[WS] Unexpected non-JSON message:', message.data);
               return;
             }
 
-            const data = JSON.parse(message.data);
-            console.log('[FRONTEND_WS] Parsed data:', data);
+            // Handle session start with pre-signed upload URL
+            if (data.uploadUrl && !uploadStarted) {
+              uploadStarted = true;
+              fetch(data.uploadUrl, {
+                method: 'PUT',
+                body: payloadString,
+              })
+                .then((resp) => {
+                  if (!resp.ok) {
+                    throw new Error(`Upload failed: ${resp.status}`);
+                  }
+                  ws.send(
+                    JSON.stringify({
+                      step: PostStreamingStatus.END,
+                      token: token,
+                    })
+                  );
+                })
+                .catch((err) => {
+                  console.error('[WS] S3 upload failed:', err);
+                  set({
+                    errorDetail:
+                      'Failed to upload document. Please try again.',
+                  });
+                  ws.close();
+                  reject(i18next.t('error.predict.general'));
+                });
+              return;
+            }
 
+            // Handle API Gateway error messages (e.g. throttle, internal error)
+            if (data.message && !data.status) {
+              console.warn('[WS] API Gateway error:', data.message);
+              return;
+            }
+
+            // Handle streaming status messages
             if (data.status) {
-              console.log('[FRONTEND_WS] Processing status:', data.status);
               switch (data.status) {
                 case PostStreamingStatus.AGENT_THINKING: {
                   Object.entries(data.log).forEach(([toolUseId, toolInfo]) => {
@@ -159,73 +139,36 @@ const usePostMessageStreaming = create<{
                   });
                   break;
                 case PostStreamingStatus.STREAMING_END:
-                  console.log(
-                    '[FRONTEND_WS] Received STREAMING_END, ending thinking state'
-                  );
-                  try {
-                    console.log(
-                      '[FRONTEND_WS] Calling handleStreamingEvent goodbye'
-                    );
-                    handleStreamingEvent({
-                      type: 'goodbye',
-                    });
-                    console.log(
-                      '[FRONTEND_WS] handleStreamingEvent goodbye completed'
-                    );
-
-                    console.log('[FRONTEND_WS] Closing WebSocket');
-                    ws.close();
-                    console.log('[FRONTEND_WS] WebSocket closed successfully');
-                  } catch (error) {
-                    console.error(
-                      '[FRONTEND_WS] Error in STREAMING_END handling:',
-                      error
-                    );
-                    ws.close();
-                  }
+                  handleStreamingEvent({ type: 'goodbye' });
+                  ws.close();
                   break;
                 case PostStreamingStatus.ERROR:
                   ws.close();
-                  console.error(data);
                   set({
                     errorDetail:
-                      data.reason || i18next.t('error.predict.invalidResponse'),
+                      data.reason ||
+                      i18next.t('error.predict.invalidResponse'),
                   });
                   throw new Error(
-                    data.reason || i18next.t('error.predict.invalidResponse')
+                    data.reason ||
+                      i18next.t('error.predict.invalidResponse')
                   );
                 default:
-                  handleStreamingEvent({
-                    type: 'reset',
-                  });
+                  handleStreamingEvent({ type: 'reset' });
                   break;
               }
-            } else {
-              ws.close();
-              console.error(data);
-              throw new Error(i18next.t('error.predict.invalidResponse'));
             }
           } catch (e) {
-            console.error('[FRONTEND_WS] Error in onmessage handler:', e);
-            console.error(
-              '[FRONTEND_WS] Message data that caused error:',
-              message.data
-            );
+            console.error('[WS] Error:', e);
             reject(i18next.t('error.predict.general'));
           }
         };
 
-        ws.onerror = (e) => {
-          console.error('[FRONTEND_WS] WebSocket error:', e);
+        ws.onerror = () => {
           ws.close();
           reject(i18next.t('error.predict.general'));
         };
-        ws.onclose = (event) => {
-          console.log(
-            '[FRONTEND_WS] WebSocket closed:',
-            event.code,
-            event.reason
-          );
+        ws.onclose = () => {
           resolve();
         };
       });
