@@ -86,6 +86,14 @@ const usePostMessageStreaming = create<{
               return;
             }
 
+            // Backward compat: old backend returns plain string instead of
+            // JSON with uploadUrl. Start chunking immediately.
+            if (message.data === 'Session started.') {
+              set({ uploadProgress: 0 });
+              startSequentialChunking();
+              return;
+            }
+
             // Handle chunk ack — send next chunk sequentially
             if (message.data === 'Message part received.') {
               chunkAckCount++;
@@ -115,17 +123,26 @@ const usePostMessageStreaming = create<{
             try {
               data = JSON.parse(message.data);
             } catch {
-              // During chunking, non-JSON responses (e.g. "Error.") for a
-              // single chunk can be retried by re-sending that chunk.
               if (!uploadComplete) {
-                console.warn(
-                  `[WS] Non-JSON during chunking, resending chunk ${chunkIndex - 1}:`,
-                  message.data
-                );
-                // Back up and resend the last chunk
-                if (chunkIndex > chunkAckCount) {
-                  chunkIndex = chunkAckCount;
-                  setTimeout(() => sendNextChunk(), 500);
+                if (chunkIndex === 0 && chunkAckCount === 0) {
+                  // Haven't started chunking — unknown START response.
+                  // Start chunking as a safe fallback.
+                  console.warn(
+                    '[WS] Unrecognized START response, starting chunked upload:',
+                    message.data
+                  );
+                  set({ uploadProgress: 0 });
+                  startSequentialChunking();
+                } else {
+                  // Already chunking — retry the failed chunk
+                  console.warn(
+                    `[WS] Non-JSON during chunking, resending chunk ${chunkIndex - 1}:`,
+                    message.data
+                  );
+                  if (chunkIndex > chunkAckCount) {
+                    chunkIndex = chunkAckCount;
+                    setTimeout(() => sendNextChunk(), 500);
+                  }
                 }
                 return;
               }
