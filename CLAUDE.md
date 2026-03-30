@@ -10,150 +10,138 @@ AWS-native chatbot using Amazon Bedrock. Deployed via CDK + CodeBuild from this 
 ```bash
 ./bin.sh --disable-self-register --bedrock-region ap-southeast-2 --repo-url https://github.com/DPenniket/bedrock-chat.git --version v3
 ```
-- This triggers a CloudFormation stack (`CodeBuildForDeploy`) which starts a CodeBuild project
-- CodeBuild does: `git clone --branch v3 https://github.com/DPenniket/bedrock-chat.git` then `npx cdk deploy --require-approval never --all`
+- CodeBuild does: `git clone --branch v3` then `npx cdk deploy --require-approval never --all`
 - Deploy is to `ap-southeast-2` (Sydney)
 
 ---
 
-## The Problem Being Solved
-**Symptom**: Uploading a ~4MB PDF to the chat causes "An error occurred while responding." in the UI. Browser console shows `{"message": "Internal server error", "connectionId":"...", "requestId":"..."}` received via WebSocket.
+## Critical Lessons Learned (DO NOT REPEAT THESE MISTAKES)
 
-**Root cause**: API Gateway WebSocket **replaces the Lambda response body with its own error format** whenever Lambda returns a non-2xx HTTP status code. The `{"message": "Internal server error", ...}` format is API Gateway's own message, NOT our Lambda's. The client's `ws.onmessage` handler JSON-parses this, sees no `data.status` field, and calls `reject()` with the generic error without ever setting `errorDetail` in Zustand — so the UI always shows the generic message with no detail about what actually went wrong.
+### 1. Never change the WebSocket chunk size from 32KB
+API Gateway WebSocket has a **hard 32KB per-message limit**. Previous attempts to increase to 100KB or 128KB broke everything. The 32KB chunk size is proven to work. Do not change it.
 
----
+### 2. Frontend and backend must stay in sync
+Changing the backend START response format (from `"Session started."` to JSON `{"uploadUrl": "..."}`) without ensuring backward compatibility in the frontend broke ALL chat — not just large documents. Always handle both old and new response formats.
 
-## Architecture: WebSocket Large Message Chunking
+### 3. The "Message part received." ack format is sacred
+Changing the ack format (e.g., to `{"ack": index}`) caused frontend/backend mismatches. The v3 format is `"Message part received."` — a plain string. Do not change this.
 
-The WebSocket API Gateway has a hard 32KB-per-message limit. For large payloads (e.g. messages embedding PDF content), a chunking protocol was built:
+### 4. Document chunking threshold must be 2.5MB
+- Documents up to ~2.5MB pass through Bedrock natively without issues
+- Setting the threshold too low (50KB, 500KB) broke normal document handling
+- Setting it too high (4.5MB) caused context window overflow and API Gateway timeouts
+- **2.5MB is the tested sweet spot** — `LARGE_DOCUMENT_THRESHOLD_BYTES = 2_500_000`
 
-### Frontend (`frontend/src/hooks/usePostMessageStreaming.ts`)
-```
-CHUNK_SIZE = 32 * 1024  // 32KB characters
-payloadString = JSON.stringify({ ...chatInput, token })
-```
-1. **START**: Client sends `{step: "START", token}` → waits for `"Session started."`
-2. **BODY**: Client sends ALL chunks simultaneously: `{step: "BODY", index, part: chunk}` for each chunk — waits for each `"Message part received."` ack
-3. **END**: After all acks received (`receivedCount === chunkedPayloads.length`), sends `{step: "END", token}`
+### 5. S3 direct upload from browser requires CORS on the S3 bucket
+Pre-signed URLs for S3 PUTs from the browser require CORS configuration on the bucket. Without it, the browser blocks the request. CORS must be deployed via CDK before the S3 direct upload path works. The sequential chunking fallback exists for when CORS isn't deployed yet.
 
-**Important**: All BODY chunks are sent at once (in parallel), creating many concurrent Lambda invocations (e.g. a 4.1MB PDF → ~172 chunks → ~172 concurrent Lambda calls).
+### 6. The bot knowledge upload already has a working S3 pre-signed URL flow
+`GET /bot/{bot_id}/presigned-url` → S3 upload via `axios.put()`. The document bucket has CORS configured in `cdk/lib/bedrock-chat-stack.ts` (lines 290-299). This pattern works and can be referenced for future S3 upload features.
 
-### Backend (`backend/app/websocket.py`)
-- **START**: Verifies token, stores `{"user_id": ...}` in S3 at `ws-chunks/{connection_id}/session.json`
-- **BODY**: Stores each chunk to S3 at `ws-chunks/{connection_id}/{index:010d}`
-- **END**: Reads session from S3, lists + reads all chunks in parallel (ThreadPoolExecutor, max 20 workers), assembles full message, calls `process_chat_input()` → Bedrock
-
-### S3 Bucket
-Environment variable: `LARGE_PAYLOAD_SUPPORT_BUCKET` → maps to `largePayloadSupportBucket` in CDK (`websocket.ts`)
+### 7. Test with ALL document sizes, not just large ones
+Multiple changes that "fixed" large documents broke small documents or normal chat. Always test: no attachment, small attachment (<100KB), medium (1-2MB), and large (>2.5MB).
 
 ---
 
-## Code Changes Made (All in `backend/app/websocket.py`)
+## Current Architecture: Large Document Upload (branch: `claude/add-document-chunking-6ZRhB`)
 
-### What was fixed (merged to v3)
-All of these changes ensure Lambda **always returns `statusCode: 200`** — the actual error detail is sent to the client exclusively via `post_to_connection` (which API Gateway never intercepts):
+### Two-layer approach:
+1. **WebSocket delivery layer** — gets the payload from browser to Lambda
+2. **Document chunking layer** — manages context window for Bedrock
 
-1. **START step invalid token** — was returning `statusCode: 403`, now calls `notificator.notify(ERROR)` + returns 200
-2. **Outer `handler()` except** — was returning `statusCode: 500`, now calls `notificator.notify(ERROR)` + returns 200
-3. **`process_chat_input` RecordNotFoundError** — was returning `statusCode: 400/404`, now returns 200
-4. **`process_chat_input` generic except** — was returning `statusCode: 500`, now returns 200
-5. **`json.loads(event["body"])`** — was OUTSIDE the try block; if body is None/malformed, Lambda runtime sets `X-Amz-Function-Error` header which API Gateway also converts to "Internal server error". Moved INSIDE the try block.
+These are independent. The delivery layer doesn't know about documents; the chunking layer doesn't know about WebSocket.
 
-Current state of the v3 branch: **all the above fixes are in place** (PRs #49 and #50 merged).
+### WebSocket Delivery Protocol
 
----
+**Frontend** (`frontend/src/hooks/usePostMessageStreaming.ts`):
+1. **START**: Client sends `{step: "START", token}`
+2. Backend returns either:
+   - `{"uploadUrl": "..."}` (new backend) → client tries S3 direct upload via XHR
+   - `"Session started."` (old backend) → client falls back to sequential chunking
+3. **If S3 upload succeeds**: Client sends END immediately
+4. **If S3 upload fails (CORS)**: Falls back to sequential WebSocket chunking:
+   - Sends BODY chunks ONE AT A TIME (32KB each), waits for `"Message part received."` ack before sending next
+   - Sequential sending avoids Lambda throttling (only 1 concurrent invocation)
+   - Progress bar updates on each ack: `uploadProgress = chunkAckCount / totalChunks * 100`
+5. **END**: After all chunks acked (or S3 upload succeeded), sends `{step: "END", token}`
 
-## The Unresolved Problem
+**Backend** (`backend/app/websocket.py`):
+- **START**: Verifies token, stores session in S3, generates pre-signed PUT URL, returns it as JSON body
+- **BODY**: Stores chunk to S3 at `ws-chunks/{connection_id}/{index:010d}`, returns `"Message part received."`
+- **END**: Tries reading direct S3 upload (`ws-chunks/{connection_id}/payload`) first; falls back to chunk assembly if not found. Then processes via `process_chat_input()` → Bedrock
 
-Despite the above fixes being deployed, the user reports **no change** in behaviour — the error still appears with no actionable reason shown to the user. Possible causes that are still undiagnosed:
+**CDK** (`cdk/lib/constructs/websocket.ts`):
+- S3 bucket `largePayloadSupportBucket` has CORS configured for PUT from `*` origin
+- 1-day lifecycle rule on `ws-chunks/` prefix for cleanup
+- Lambda: 512MB memory, 15-minute timeout
 
-### Hypothesis 1: Lambda concurrency throttling (most likely)
-With ~172 BODY chunks sent at once → ~172 concurrent Lambda invocations. If Lambda is throttled (account-level concurrency limit, reserved concurrency, or burst limit), the Lambda service returns a `429 TooManyRequests` to API Gateway **before Lambda even runs**. Our code fixes can't help — Lambda never executes. API Gateway converts the throttle to `{"message": "Internal server error", ...}`.
+### Document Chunking Layer
 
-- **ap-southeast-2 burst limit**: 500 concurrent invocations
-- **Default account limit**: 1000 concurrent invocations
-- Check: Lambda console → Concurrency metrics
+**Backend** (`backend/app/document_chunker.py`):
+- Threshold: `LARGE_DOCUMENT_THRESHOLD_BYTES = 2_500_000` (2.5MB)
+- Documents >2.5MB → text extraction → truncate to 320K chars (~80K tokens) → split into 50K char chunks
+- Supports: PDF (pypdf), DOCX (python-docx), XLSX (openpyxl), plain text
+- If text extraction fails for PDFs: tries splitting to first 100 pages, or returns original if <4.5MB
+- Called in `backend/app/usecases/chat.py` via `process_attachments_for_context_window()`
 
-### Hypothesis 2: Deployment not actually applying changes
-User reports "zero impact" from all changes. Possible causes:
-- The CDK deploy might be failing silently on the Lambda stack while succeeding on others
-- Lambda asset hash might not be recomputed correctly
-- User might be accessing a different endpoint/environment
+### Upload Progress Bar
 
-### Hypothesis 3: Different root cause than expected
-The `GET .../bot?kind=private 503 (Service Unavailable)` REST API error also appears in the console — not directly related to WebSocket but may indicate broader infrastructure issues.
-
----
-
-## How to Verify the Deployment Is Working
-
-**Step 1: Confirm Lambda code is updated**
-- AWS Console → Lambda → search for `WebSocket` handler → Code tab → open `app/websocket.py`
-- Look for `json.loads(event["body"])` being INSIDE the `try:` block (our most recent fix)
-- If it's still before the `notification_thread = Thread(...)` line, the new code wasn't deployed
-
-**Step 2: Check CloudWatch logs for the failing Lambda invocation**
-- CloudWatch → Log groups → find the WebSocket Lambda log group
-- Filter for the time of a failed PDF upload
-- Look for `"Received event:"` log entries for BODY step invocations
-- If NO logs appear for some invocations → those were throttled (never ran)
-- If logs appear with `"Operation failed:"` → our code caught the exception; the reason is logged there
-
-**Step 3: Check Lambda concurrency**
-- AWS Console → Lambda → the WebSocket handler → Monitor tab → Concurrency graph
-- Look for throttles during a PDF upload attempt
-
-**Step 4: Add a version marker (quick smoke test)**
-To confirm a new deployment actually updated Lambda, temporarily add a distinctive log line and redeploy:
-```python
-logger.info("DEPLOYMENT_VERSION_v2_CHECK")  # add near top of handler()
-```
-Then upload anything and check CloudWatch — if you don't see that string, the deploy didn't update the Lambda.
+**Frontend** (`frontend/src/components/ChatMessage.tsx`):
+- `uploadProgress` state in `usePostMessageStreaming` Zustand store (0-100 or null)
+- S3 direct path: real-time byte progress via `XMLHttpRequest.upload.onprogress`
+- Sequential chunk path: updates on each chunk ack
+- Displayed as a blue progress bar with percentage in the assistant message area
+- Replaces typing indicator during upload; typing indicator takes over after upload completes
 
 ---
 
-## Frontend Error Flow (for reference)
-```
-ws.onmessage receives {"message": "Internal server error", ...}
-→ JSON.parse succeeds
-→ data.status is undefined → goes to else branch
-→ ws.close(); throw new Error('error.predict.invalidResponse')
-→ caught by outer catch → reject('error.predict.general')
-→ errorDetail is NEVER SET (only set in case PostStreamingStatus.ERROR:)
-→ UI shows generic "An error occurred while responding."
-```
-When our fixes work correctly:
-```
-Lambda catches error → notificator.notify({"status": "ERROR", "reason": "actual reason"})
-→ post_to_connection delivers this to client
-→ client receives it → data.status === "ERROR" → set({ errorDetail: data.reason })
-→ UI shows actual reason
-```
-But for throttled invocations (Lambda never runs), `notificator.notify` is never called → client still gets API Gateway's "Internal server error" → `errorDetail` never set.
+## Existing Error Handling
+
+All Lambda paths return `statusCode: 200`. Actual errors sent via `post_to_connection`:
+- START invalid token → `notificator.notify(ERROR)` + return 200
+- BODY invalid index → return 200 with "Error." body
+- END/processing errors → `notificator.notify(ERROR)` with reason + return 200
+- Outer handler except → `notificator.notify(ERROR)` with reason + return 200
+
+Frontend handles:
+- `"Error."` and `"Internal server error"` during chunking → retry chunk
+- API Gateway JSON errors during chunking → retry chunk
+- `{"status": "ERROR", "reason": "..."}` → display reason in UI
+- `{"message": "Endpoint request timed out"}` → filtered/ignored (Lambda continues via post_to_connection)
 
 ---
 
-## Lambda Configuration (CDK — `cdk/lib/constructs/websocket.ts`)
-- **Runtime**: Python 3.13
-- **Memory**: 512 MB
-- **Timeout**: 15 minutes
-- **SnapStart**: Conditional (`enableLambdaSnapStart` in `cdk/cdk.json`, default `false`)
-- **Concurrency**: No reserved concurrency set
-- **API Gateway integration**: Uses `handler.currentVersion` (published Lambda version)
+## Known Remaining Issues
+
+### "Request failed with status code 500" in app
+User reports seeing this error in the app even when things appear to work. Origin not yet identified — likely a REST API call (possibly `GET /bot?kind=private`) failing but not blocking the main chat flow.
+
+### Document upload tested working up to 4.3MB
+The sequential chunking fallback + document chunker combination is confirmed working for documents up to at least 4.3MB. The 4.5MB Bedrock per-document limit is the hard ceiling.
 
 ---
-
-## Next Steps (Priority Order)
-
-1. **Redeploy with latest v3 code** (both PRs #49 and #50 are now merged to v3)
-2. **After deploy, verify Lambda code** via console (Step 1 above)
-3. **Test upload and check CloudWatch** — does `"Operation failed:"` appear? Or no logs at all (throttle)?
-4. **If throttling**: Fix is in the frontend — rate-limit BODY chunk sending (e.g. send in batches of 5 with a small delay, or send one at a time)
-5. **If different error**: The actual error reason will now appear in CloudWatch logs and (if `post_to_connection` succeeds) in the frontend error panel
 
 ## File Locations
 - Backend WebSocket handler: `backend/app/websocket.py`
+- Backend document chunker: `backend/app/document_chunker.py`
+- Backend chat processing: `backend/app/usecases/chat.py`
+- Backend document chunker tests: `backend/tests/test_document_chunker.py`
 - Frontend streaming hook: `frontend/src/hooks/usePostMessageStreaming.ts`
+- Frontend chat message (progress bar): `frontend/src/components/ChatMessage.tsx`
 - CDK WebSocket construct: `cdk/lib/constructs/websocket.ts`
+- CDK main stack (document bucket CORS): `cdk/lib/bedrock-chat-stack.ts`
+- S3 presigned URL utility: `backend/app/utils.py` (lines 73-96)
+- Bot presigned URL endpoint: `backend/app/routes/bot.py` → `issue_presigned_url()`
+- Frontend bot upload: `frontend/src/hooks/useBotApi.ts` → `uploadFile()`
+- Supported file extensions: `frontend/src/constants/supportedAttachedFiles.ts`
 - Deploy script: `bin.sh` + `deploy.yml`
-- Dev branch: `claude/increase-upload-limit-5kdsn`
+- Dev branch: `claude/add-document-chunking-6ZRhB`
+
+## Attachment Data Flow (for reference)
+```
+Browser: File → ArrayBuffer → base64 string → PostMessageRequest.message.content[].body
+WebSocket: JSON payload (includes base64) → chunked 32KB → Lambda → S3 → reassemble
+Backend: ChatInput → Base64EncodedBytes (auto-decodes to bytes) → AttachmentContentModel
+Chunker: If >2.5MB → extract text → truncate to 320K chars → TextContentModel blocks
+Bedrock: Either raw document bytes (native) or extracted text chunks
+```
