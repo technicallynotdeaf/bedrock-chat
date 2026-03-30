@@ -113,19 +113,11 @@ Frontend handles:
 
 ## Known Remaining Issues
 
-### Documents near 4.5MB still failing
-4.3MB documents fail even with sequential chunking (progress bar works, error occurs during END step processing). Root cause not yet identified. Possible causes:
-- Lambda 512MB memory might be tight for ~16MB peak (5.8MB JSON + base64 decode + Python overhead)
-- S3 chunk assembly for 181 objects + JSON parsing + pypdf extraction could exceed API Gateway 29s integration timeout
-- The document chunker (pypdf) might fail on certain PDFs
-
-### Potential fixes not yet tried:
-- Increase Lambda memory to 1024MB (more CPU + memory)
-- Upload files to S3 separately from the chat message (like bot knowledge upload does), sending only an S3 reference through WebSocket — this would make the WebSocket payload tiny regardless of document size
-- Process/extract document text on the frontend before sending (pdf.js)
-
 ### "Request failed with status code 500" in app
 User reports seeing this error in the app even when things appear to work. Origin not yet identified — likely a REST API call (possibly `GET /bot?kind=private`) failing but not blocking the main chat flow.
+
+### Document upload tested working up to 4.3MB
+The sequential chunking fallback + document chunker combination is confirmed working for documents up to at least 4.3MB. The 4.5MB Bedrock per-document limit is the hard ceiling.
 
 ---
 
