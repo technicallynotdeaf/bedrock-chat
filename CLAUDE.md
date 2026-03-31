@@ -15,6 +15,17 @@ AWS-native chatbot using Amazon Bedrock. Deployed via CDK + CodeBuild from this 
 
 ---
 
+## Data Sovereignty Requirement (STRICT — DO NOT VIOLATE)
+
+**All inference must remain within Australia at all times.** Data must never leave Australian soil.
+
+- AU inference profiles must only include `ap-southeast-2` (Sydney) and `ap-southeast-4` (Melbourne)
+- **Never add `ap-southeast-6` (Auckland, New Zealand)** — Auckland is outside Australia and adding it would violate data sovereignty requirements
+- `enableBedrockGlobalInference` must remain `false` — global profiles route outside Australia
+- Do not add any non-Australian regions (e.g. `us-*`, `eu-*`, `ap-northeast-*`, `ap-southeast-6`) to the AU inference profile mappings
+
+---
+
 ## Critical Lessons Learned (DO NOT REPEAT THESE MISTAKES)
 
 ### 1. Never change the WebSocket chunk size from 32KB

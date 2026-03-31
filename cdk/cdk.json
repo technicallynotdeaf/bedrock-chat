@@ -71,10 +71,12 @@
       "8000:0000:0000:0000:0000:0000:0000:0000/1"
     ],
     "enableRagReplicas": true,
-    "enableBedrockGlobalInference": true,
+    "enableBedrockGlobalInference": false,
     "enableBedrockCrossRegionInference": true,
     "enableLambdaSnapStart": true,
     "globalAvailableModels": [],
+    "defaultModel": "claude-v4.6-sonnet",
+    "titleModel": "claude-v4.5-haiku",
     "tokenValidMinutes": 30,
     "alternateDomainName": "",
     "hostedZoneId": "",
