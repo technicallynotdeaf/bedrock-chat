@@ -215,13 +215,13 @@ const ChatMessage: React.FC<Props> = (props) => {
           className="fixed z-50 -translate-x-1/2 -translate-y-full"
           style={{ left: selectionPopover.x, top: selectionPopover.y }}>
           <button
-            className="flex items-center gap-1.5 rounded-full bg-gray-900 px-3 py-1.5 text-xs font-medium text-white shadow-lg hover:bg-gray-700 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-200"
+            className="flex items-center gap-1.5 rounded-full bg-aws-squid-ink-light px-3 py-1.5 text-xs font-medium text-white shadow-lg hover:bg-aa-purple-2 dark:bg-aws-squid-ink-light dark:hover:bg-aa-purple-2"
             onMouseDown={(e) => e.preventDefault()}
             onClick={quoteSelectedText}>
             <PiArrowBendUpLeft className="text-sm" />
             Quote reply
           </button>
-          <div className="mx-auto mt-0.5 h-1.5 w-1.5 rotate-45 bg-gray-900 dark:bg-white" />
+          <div className="mx-auto mt-0.5 h-1.5 w-1.5 rotate-45 bg-aws-squid-ink-light dark:bg-aws-squid-ink-light" />
         </div>
       )}
 
