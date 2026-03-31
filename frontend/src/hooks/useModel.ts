@@ -64,9 +64,16 @@ const useModel = (botId?: string | null, activeModels?: ActiveModels) => {
   const availableModels = useMemo<ModelItem[]>(() => {
     return [
       {
-        modelId: 'claude-v4.5-sonnet',
-        label: t('model.claude-v4.5-sonnet.label'),
-        description: t('model.claude-v4.5-sonnet.description'),
+        modelId: 'claude-v4.6-sonnet',
+        label: t('model.claude-v4.6-sonnet.label'),
+        description: t('model.claude-v4.6-sonnet.description'),
+        supportMediaType: CLAUDE_SUPPORTED_MEDIA_TYPES,
+        supportReasoning: true,
+      },
+      {
+        modelId: 'claude-v4.6-opus',
+        label: t('model.claude-v4.6-opus.label'),
+        description: t('model.claude-v4.6-opus.description'),
         supportMediaType: CLAUDE_SUPPORTED_MEDIA_TYPES,
         supportReasoning: true,
       },
@@ -130,7 +137,7 @@ const useModel = (botId?: string | null, activeModels?: ActiveModels) => {
 
     // If config default is not available or not set yet, select the first model
     // Returns undefined if no models are available
-    return filteredModels[0]?.modelId ?? 'claude-v4.5-haiku';
+    return filteredModels[0]?.modelId ?? 'claude-v4.6-sonnet';
   }, [filteredModels, globalConfig?.defaultModel]);
 
   // select the model via list of activeModels
