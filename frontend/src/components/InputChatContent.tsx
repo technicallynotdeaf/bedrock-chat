@@ -14,6 +14,7 @@ import {
   PiArrowsCounterClockwise,
   PiX,
   PiArrowFatLineRight,
+  PiArrowBendUpLeft,
   PiFilePdf,
 } from 'react-icons/pi';
 import { LuFilePlus2 } from 'react-icons/lu';
@@ -74,7 +75,7 @@ const MAX_IMAGE_HEIGHT = 1568;
 const MAX_FILE_SIZE_TO_SEND_MB = 6;
 const MAX_FILE_SIZE_TO_SEND_BYTES = MAX_FILE_SIZE_TO_SEND_MB * 1024 * 1024;
 
-const useInputChatContentState = create<{
+export const useInputChatContentState = create<{
   base64EncodedImages: string[];
   pushBase64EncodedImage: (encodedImage: string) => void;
   removeBase64EncodedImage: (index: number) => void;
@@ -97,6 +98,9 @@ const useInputChatContentState = create<{
   setPreviewImageUrl: (url: string | null) => void;
   isOpenPreviewImage: boolean;
   setIsOpenPreviewImage: (isOpen: boolean) => void;
+  quotedText: string | null;
+  setQuotedText: (text: string | null) => void;
+  clearQuotedText: () => void;
 }>((set, get) => ({
   base64EncodedImages: [],
   pushBase64EncodedImage: (encodedImage) => {
@@ -126,6 +130,9 @@ const useInputChatContentState = create<{
   setIsOpenPreviewImage: (isOpen) => {
     set({ isOpenPreviewImage: isOpen });
   },
+  quotedText: null,
+  setQuotedText: (text) => set({ quotedText: text }),
+  clearQuotedText: () => set({ quotedText: null }),
   attachedFiles: [],
   pushTextFile: (file) => {
     set({
@@ -178,6 +185,8 @@ const InputChatContent = forwardRef<HTMLElement, Props>(
       pushTextFile,
       removeTextFile,
       clearAttachedFiles,
+      quotedText,
+      clearQuotedText,
     } = useInputChatContentState();
 
     // Compute total size from actual current files to avoid stale state bugs.
@@ -216,8 +225,12 @@ const InputChatContent = forwardRef<HTMLElement, Props>(
         extractedContent: file.content,
       }));
 
+      const finalContent = quotedText
+        ? `> ${quotedText.split('\n').join('\n> ')}\n\n${content}`
+        : content;
+
       props.onSend(
-        content,
+        finalContent,
         props.reasoningEnabled,
         props.internetSearchEnabled,
         !disabledImageUpload && base64EncodedImages.length > 0
@@ -228,14 +241,17 @@ const InputChatContent = forwardRef<HTMLElement, Props>(
       setContent('');
       clearBase64EncodedImages();
       clearAttachedFiles();
+      clearQuotedText();
     }, [
       base64EncodedImages,
       attachedFiles,
       clearBase64EncodedImages,
       clearAttachedFiles,
+      clearQuotedText,
       content,
       disabledImageUpload,
       props,
+      quotedText,
     ]);
 
     const encodeAndPushImage = useCallback(
@@ -578,6 +594,23 @@ const InputChatContent = forwardRef<HTMLElement, Props>(
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* Quote reply banner */}
+          {quotedText && (
+            <div className="mx-3 mt-2.5 flex items-start gap-2 rounded-lg border-l-2 border-aws-sea-blue bg-aws-sea-blue/5 px-3 py-2 dark:bg-aws-sea-blue/10">
+              <PiArrowBendUpLeft className="mt-0.5 shrink-0 text-sm text-aws-sea-blue" />
+              <p className="min-w-0 flex-1 truncate text-xs text-aws-font-color-light/70 dark:text-aws-font-color-dark/60">
+                {quotedText.length > 100
+                  ? quotedText.slice(0, 100) + '…'
+                  : quotedText}
+              </p>
+              <button
+                className="shrink-0 text-aws-font-color-light/40 hover:text-aws-font-color-light dark:text-aws-font-color-dark/40 dark:hover:text-aws-font-color-dark"
+                onClick={clearQuotedText}>
+                <PiX className="text-sm" />
+              </button>
             </div>
           )}
 

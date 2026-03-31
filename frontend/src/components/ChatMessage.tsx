@@ -1,13 +1,15 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { twMerge } from 'tailwind-merge';
 import ChatMessageMarkdown from './ChatMessageMarkdown';
 import ButtonCopy from './ButtonCopy';
 import {
+  PiArrowBendUpLeft,
   PiCaretLeftBold,
   PiNotePencil,
   PiThumbsDown,
   PiThumbsDownFill,
 } from 'react-icons/pi';
+import { useInputChatContentState } from './InputChatContent';
 import { BaseProps } from '../@types/common';
 import {
   DisplayMessageContent,
@@ -49,6 +51,56 @@ const ChatMessage: React.FC<Props> = (props) => {
   const [changedContent, setChangedContent] = useState('');
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
   const { uploadProgress } = usePostMessageStreaming();
+  const { setQuotedText } = useInputChatContentState();
+
+  // Text-selection popover state
+  const [selectionPopover, setSelectionPopover] = useState<{
+    text: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  const handleMouseUp = useCallback(() => {
+    const selection = window.getSelection();
+    const text = selection?.toString().trim();
+    if (!text) {
+      setSelectionPopover(null);
+      return;
+    }
+    const range = selection!.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    setSelectionPopover({
+      text,
+      x: rect.left + rect.width / 2 + window.scrollX,
+      y: rect.top + window.scrollY - 8,
+    });
+  }, []);
+
+  // Dismiss popover when clicking outside it
+  useEffect(() => {
+    const onMouseDown = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setSelectionPopover(null);
+      }
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, []);
+
+  const quoteSelectedText = useCallback(() => {
+    if (!selectionPopover) return;
+    setQuotedText(selectionPopover.text);
+    setSelectionPopover(null);
+    window.getSelection()?.removeAllRanges();
+    // Scroll to the bottom so the input is visible
+    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+  }, [selectionPopover, setQuotedText]);
+
+  const quoteWholeMessage = useCallback((text: string) => {
+    setQuotedText(text);
+    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+  }, [setQuotedText]);
 
   const [firstTextContent, setFirstTextContent] = useState(0);
 
@@ -156,6 +208,23 @@ const ChatMessage: React.FC<Props> = (props) => {
 
   return (
     <div className={twMerge(props.className, 'animate-fade-in px-4 py-4')}>
+      {/* ── TEXT SELECTION POPOVER ── */}
+      {selectionPopover && (
+        <div
+          ref={popoverRef}
+          className="fixed z-50 -translate-x-1/2 -translate-y-full"
+          style={{ left: selectionPopover.x, top: selectionPopover.y }}>
+          <button
+            className="flex items-center gap-1.5 rounded-full bg-gray-900 px-3 py-1.5 text-xs font-medium text-white shadow-lg hover:bg-gray-700 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-200"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={quoteSelectedText}>
+            <PiArrowBendUpLeft className="text-sm" />
+            Quote reply
+          </button>
+          <div className="mx-auto mt-0.5 h-1.5 w-1.5 rotate-45 bg-gray-900 dark:bg-white" />
+        </div>
+      )}
+
       {/* ── SIBLING NAVIGATOR ── */}
       {(chatContent?.sibling.length ?? 0) > 1 && (
         <div className={twMerge(
@@ -237,7 +306,9 @@ const ChatMessage: React.FC<Props> = (props) => {
 
                 {/* Text bubble */}
                 {chatContent!.content.some((c) => c.contentType === 'text') && (
-                  <div className="rounded-2xl rounded-tr-sm bg-aa-purple-3 px-4 py-3 text-sm leading-relaxed text-white shadow-sm dark:bg-white/15 dark:text-white/90">
+                  <div
+                    className="rounded-2xl rounded-tr-sm bg-aa-purple-3 px-4 py-3 text-sm leading-relaxed text-white shadow-sm dark:bg-white/15 dark:text-white/90"
+                    onMouseUp={handleMouseUp}>
                     {chatContent!.content.map((content, idx) => {
                       if (content.contentType !== 'text') return null;
                       return (
@@ -251,8 +322,19 @@ const ChatMessage: React.FC<Props> = (props) => {
                   </div>
                 )}
 
-                {/* Edit button — shown on hover */}
-                <div className="mt-1 flex justify-end opacity-0 transition-opacity group-hover:opacity-100">
+                {/* Edit + Reply buttons — shown on hover */}
+                <div className="mt-1 flex justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                  <ButtonIcon
+                    className="text-dark-gray dark:text-light-gray"
+                    onClick={() => {
+                      const plainText = chatContent!.content
+                        .filter((c) => c.contentType === 'text')
+                        .map((c) => (c as TextContent).body)
+                        .join('\n');
+                      quoteWholeMessage(plainText);
+                    }}>
+                    <PiArrowBendUpLeft />
+                  </ButtonIcon>
                   <ButtonIcon
                     className="text-dark-gray dark:text-light-gray"
                     onClick={() => {
@@ -347,18 +429,31 @@ const ChatMessage: React.FC<Props> = (props) => {
               )}
 
             {/* Message text */}
-            <ChatMessageMarkdown
-              isStreaming={props.isStreaming}
-              relatedDocuments={relatedDocuments}
-              messageId={chatContent!.id}>
-              {chatContent!.content
-                .filter((content) => content.contentType === 'text')
-                .map((content) => (content as TextContent).body)
-                .join('\n')}
-            </ChatMessageMarkdown>
+            <div onMouseUp={handleMouseUp}>
+              <ChatMessageMarkdown
+                isStreaming={props.isStreaming}
+                relatedDocuments={relatedDocuments}
+                messageId={chatContent!.id}>
+                {chatContent!.content
+                  .filter((content) => content.contentType === 'text')
+                  .map((content) => (content as TextContent).body)
+                  .join('\n')}
+              </ChatMessageMarkdown>
+            </div>
 
             {/* Action bar — shown on hover */}
             <div className="mt-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+              <ButtonIcon
+                className="text-dark-gray dark:text-light-gray"
+                onClick={() => {
+                  const plainText = chatContent!.content
+                    .filter((c) => c.contentType === 'text')
+                    .map((c) => (c as TextContent).body)
+                    .join('\n');
+                  quoteWholeMessage(plainText);
+                }}>
+                <PiArrowBendUpLeft />
+              </ButtonIcon>
               <ButtonIcon
                 className="text-dark-gray dark:text-light-gray"
                 onClick={() => setIsFeedbackOpen(true)}>
