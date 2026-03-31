@@ -21,6 +21,16 @@ const translation = {
       userGroups: 'User Groups',
     },
     model: {
+      'claude-v4.6-sonnet': {
+        label: 'Claude 4.6 (Sonnet)',
+        description:
+          'Latest Sonnet model with improved intelligence and performance over 4.5.',
+      },
+      'claude-v4.6-opus': {
+        label: 'Claude 4.6 (Opus)',
+        description:
+          'Most capable Claude model with maximum intelligence for the most complex tasks.',
+      },
       'claude-v4-opus': {
         label: 'Claude 4 (Opus)',
         description:

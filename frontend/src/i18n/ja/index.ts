@@ -24,6 +24,16 @@ const translation: typeof en = {
       backChat: 'チャットに戻る',
     },
     model: {
+      'claude-v4.6-sonnet': {
+        label: 'Claude 4.6 (Sonnet)',
+        description:
+          '4.5より知性とパフォーマンスが向上した最新のSonnetモデル',
+      },
+      'claude-v4.6-opus': {
+        label: 'Claude 4.6 (Opus)',
+        description:
+          '最も複雑なタスクに対応する最高性能のClaudeモデル',
+      },
       'claude-v4-opus': {
         label: 'Claude 4 (Opus)',
         description:
