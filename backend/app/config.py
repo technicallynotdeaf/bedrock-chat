@@ -220,6 +220,18 @@ BEDROCK_PRICING = {
     },
     "ap-northeast-1": {},
     "default": {
+        "claude-v4.6-opus": {
+            "input": 0.015,
+            "output": 0.075,
+            "cache_write_input": 0.01875,
+            "cache_read_input": 0.0015,
+        },
+        "claude-v4.6-sonnet": {
+            "input": 0.003,
+            "output": 0.015,
+            "cache_write_input": 0.00375,
+            "cache_read_input": 0.0003,
+        },
         "claude-v4-opus": {
             "input": 0.015,
             "output": 0.075,

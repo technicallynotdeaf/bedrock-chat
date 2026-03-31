@@ -57,9 +57,11 @@ ENABLE_BEDROCK_CROSS_REGION_INFERENCE = (
 
 # Base model IDs mapping
 BASE_MODEL_IDS = {
+    "claude-v4.6-opus": "anthropic.claude-opus-4-6",
     "claude-v4-opus": "anthropic.claude-opus-4-20250514-v1:0",
     "claude-v4.1-opus": "anthropic.claude-opus-4-1-20250805-v1:0",
     "claude-v4.5-opus": "anthropic.claude-opus-4-5-20251101-v1:0",
+    "claude-v4.6-sonnet": "anthropic.claude-sonnet-4-6",
     "claude-v4-sonnet": "anthropic.claude-sonnet-4-20250514-v1:0",
     "claude-v4.5-sonnet": "anthropic.claude-sonnet-4-5-20250929-v1:0",
     "claude-v4.5-haiku": "anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -183,6 +185,18 @@ GLOBAL_INFERENCE_PROFILES = {
 
 # Regional inference profiles
 REGIONAL_INFERENCE_PROFILES = {
+    "claude-v4.6-opus": {
+        "supported_regions": {
+            "ap-southeast-2": "au",
+            "ap-southeast-4": "au",
+        }
+    },
+    "claude-v4.6-sonnet": {
+        "supported_regions": {
+            "ap-southeast-2": "au",
+            "ap-southeast-4": "au",
+        }
+    },
     "claude-v4-opus": {
         "supported_regions": {"us-east-1": "us", "us-east-2": "us", "us-west-2": "us"}
     },
@@ -230,6 +244,8 @@ REGIONAL_INFERENCE_PROFILES = {
             "us-west-2": "us",
             "ap-northeast-1": "jp",
             "ap-northeast-3": "jp",
+            "ap-southeast-2": "au",
+            "ap-southeast-4": "au",
             "eu-central-1": "eu",
             "eu-north-1": "eu",
             "eu-west-1": "eu",
@@ -421,8 +437,10 @@ def is_tooluse_supported(model: type_model_name) -> bool:
 
 def is_specify_both_temperature_and_top_p_supported(model: type_model_name) -> bool:
     return model not in [
+        "claude-v4.6-opus",
         "claude-v4.1-opus",
         "claude-v4.5-opus",
+        "claude-v4.6-sonnet",
         "claude-v4.5-sonnet",
         "claude-v4.5-haiku",
     ]
@@ -433,9 +451,11 @@ def is_prompt_caching_supported(
 ) -> bool:
     if target == "tool":
         return model in [
+            "claude-v4.6-opus",
             "claude-v4-opus",
             "claude-v4.1-opus",
             "claude-v4.5-opus",
+            "claude-v4.6-sonnet",
             "claude-v4-sonnet",
             "claude-v4.5-sonnet",
             "claude-v4.5-haiku",
@@ -446,9 +466,11 @@ def is_prompt_caching_supported(
 
     else:
         return model in [
+            "claude-v4.6-opus",
             "claude-v4-opus",
             "claude-v4.1-opus",
             "claude-v4.5-opus",
+            "claude-v4.6-sonnet",
             "claude-v4-sonnet",
             "claude-v4.5-sonnet",
             "claude-v4.5-haiku",
