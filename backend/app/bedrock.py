@@ -57,7 +57,7 @@ ENABLE_BEDROCK_CROSS_REGION_INFERENCE = (
 
 # Base model IDs mapping
 BASE_MODEL_IDS = {
-    "claude-v4.6-opus": "anthropic.claude-opus-4-6",
+    "claude-v4.6-opus": "anthropic.claude-opus-4-6-v1",
     "claude-v4-opus": "anthropic.claude-opus-4-20250514-v1:0",
     "claude-v4.1-opus": "anthropic.claude-opus-4-1-20250805-v1:0",
     "claude-v4.5-opus": "anthropic.claude-opus-4-5-20251101-v1:0",
@@ -189,12 +189,14 @@ REGIONAL_INFERENCE_PROFILES = {
         "supported_regions": {
             "ap-southeast-2": "au",
             "ap-southeast-4": "au",
+            "ap-southeast-6": "au",
         }
     },
     "claude-v4.6-sonnet": {
         "supported_regions": {
             "ap-southeast-2": "au",
             "ap-southeast-4": "au",
+            "ap-southeast-6": "au",
         }
     },
     "claude-v4-opus": {
@@ -246,6 +248,7 @@ REGIONAL_INFERENCE_PROFILES = {
             "ap-northeast-3": "jp",
             "ap-southeast-2": "au",
             "ap-southeast-4": "au",
+            "ap-southeast-6": "au",
             "eu-central-1": "eu",
             "eu-north-1": "eu",
             "eu-west-1": "eu",
