@@ -189,14 +189,12 @@ REGIONAL_INFERENCE_PROFILES = {
         "supported_regions": {
             "ap-southeast-2": "au",
             "ap-southeast-4": "au",
-            "ap-southeast-6": "au",
         }
     },
     "claude-v4.6-sonnet": {
         "supported_regions": {
             "ap-southeast-2": "au",
             "ap-southeast-4": "au",
-            "ap-southeast-6": "au",
         }
     },
     "claude-v4-opus": {
@@ -248,7 +246,6 @@ REGIONAL_INFERENCE_PROFILES = {
             "ap-northeast-3": "jp",
             "ap-southeast-2": "au",
             "ap-southeast-4": "au",
-            "ap-southeast-6": "au",
             "eu-central-1": "eu",
             "eu-north-1": "eu",
             "eu-west-1": "eu",
