@@ -121,10 +121,6 @@ def add_current_user_to_request(request: Request, call_next: ASGIApp):
             token_str = authorization.split(" ")[1]
             token = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token_str)
             request.state.current_user = get_current_user(token)
-        else:
-            request.state.current_user = User(
-                id="test_user", name="test_user", email="user@example.com", groups=[]
-            )
 
     response = call_next(request)  # type: ignore
     return response
@@ -134,10 +130,6 @@ def add_current_user_to_request(request: Request, call_next: ASGIApp):
 async def add_log_requests(request: Request, call_next: ASGIApp):
     logger.info(f"Request path: {request.url.path}")
     logger.info(f"Request method: {request.method}")
-    logger.info(f"Request headers: {request.headers}")
-
-    body = await request.body()
-    logger.info(f"Request body: {body.decode('utf-8')[:100]}...")
 
     response = await call_next(request)  # type: ignore
 
