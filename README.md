@@ -14,6 +14,77 @@
 A multilingual generative AI platform powered by [Amazon Bedrock](https://aws.amazon.com/bedrock/).
 Supports chat, custom bots with knowledge (RAG), bot sharing via a bot store, and task automation using agents.
 
+---
+
+## Fork Customisations (DPenniket/bedrock-chat)
+
+> This is a fork of [aws-samples/bedrock-chat v3](https://github.com/aws-samples/bedrock-chat/tree/v3), customised for deployment at **ACIL Allen** on AWS in Australia. The following changes have been made on top of the upstream v3 baseline.
+
+### Branding & UI
+
+- **Rebranded** to "AA Bedrock" with the ACIL Allen visual identity — custom colour palette, typography, and logo applied throughout the frontend and document outputs.
+- **Modernised UI** using a Vercel-inspired design language (clean cards, neutral tones, refined spacing).
+- **Sticky model selector** moved to the chat header so it remains visible while scrolling.
+- **"Starred Bots" renamed to "Favourite Bots"** in the English UI.
+
+### Australian Deployment & Data Sovereignty
+
+- **Deployed to `ap-southeast-2` (Sydney)** via CodeBuild from this repository (branch `v3`). Self-registration is disabled by default.
+- **AU-only cross-region inference profiles** — only `ap-southeast-2` (Sydney) and `ap-southeast-4` (Melbourne) are included. Auckland (`ap-southeast-6`) and all non-Australian regions are explicitly excluded to satisfy data sovereignty requirements.
+- **`enableBedrockGlobalInference` is `false`** — global inference profiles that route outside Australia are not used.
+
+### Models
+
+- **Added Claude Sonnet 4.6, Haiku 4.5, and Opus 4.6** with AU-only cross-region inference profiles, replacing the narrower model set shipped in upstream v3.
+- **Default title-generation model** set to `claude-haiku-4.5` for speed and cost efficiency.
+
+### Search
+
+- **Replaced DuckDuckGo with [Tavily](https://tavily.com/)** for the internet search toggle. Tavily is enabled by default and wired into the WebSocket Lambda via AWS Secrets Manager.
+- **Upgraded `fetch_website` agent tool** to use the Tavily Extract API for higher-quality web page analysis.
+- **Auto-detect PDFs from URLs** — when a URL in the chat resolves to a PDF, the backend fetches and includes it automatically.
+
+### Knowledge Base / Vector Search
+
+- **Replaced Amazon OpenSearch Serverless with [Amazon S3 Vectors](https://aws.amazon.com/s3/features/vectors/)** for bot and conversation search. This removes the OpenSearch dependency and reduces running costs significantly.
+
+### Large Document Support
+
+- **Document chunking** for attachments larger than 2.5 MB — text is extracted from PDF, DOCX, XLSX, and plain-text files, truncated to 320 K characters, and sent to Bedrock as text chunks rather than raw bytes.
+- **S3 pre-signed upload path** — large WebSocket payloads are uploaded directly from the browser to S3 via a pre-signed PUT URL, with a sequential chunking fallback (32 KB chunks, one at a time) for environments where S3 CORS is not yet configured.
+- **Real-time upload progress bar** shown in the assistant message area during large-document uploads.
+- Tested working up to **4.3 MB documents**.
+
+### Conversation Features
+
+- **Message reply with quote** — select text in any message and click reply to include it as a quoted reference in your next message. The styled popover matches the ACIL Allen sidebar colour.
+- **Context window auto-trim** — conversation history is automatically pruned when the accumulated prompt would exceed the model's context window, preventing silent failures on long conversations.
+- **Web page URL extraction** — URLs pasted into chat are resolved and their content included in the context for all conversation types.
+
+### Document Generation Tools
+
+- **ACIL Allen branded document generation tools** ported and adapted from [aws-samples/sample-aws-idp-pipeline](https://github.com/aws-samples/sample-aws-idp-pipeline). These tools allow the AI agent to produce Word documents (`.docx`) styled to the ACIL Allen brand guide directly from chat.
+
+### Admin Panel Enhancements
+
+- **User Analytics page** added to the admin panel — shows per-user usage metrics with conversation drill-down.
+- **Costs displayed in AUD** throughout the admin analytics interface.
+
+### Security Hardening
+
+- **IAM least-privilege** — Lambda execution roles tightened to the minimum required permissions.
+- **`eval()` removed** from backend code — replaced with safe alternatives.
+- **Authentication improvements** — additional input validation and auth checks added across REST and WebSocket handlers.
+- Security-hardening changes are covered by an expanded automated test suite.
+
+### Infrastructure
+
+- **WebSocket relay storage migrated from DynamoDB to S3** — multi-part WebSocket chunk assembly now uses S3 objects instead of DynamoDB items, removing size constraints and reducing cost.
+- **Base system prompt** applied to all conversations — establishes consistent assistant behaviour, ACIL Allen context, and AEST timezone awareness.
+- App clock **pinned to AEST (UTC+10)** so date/time responses are always in Australian Eastern Standard Time.
+
+---
+
 ![](./docs/imgs/demo.gif)
 
 > [!Warning]
