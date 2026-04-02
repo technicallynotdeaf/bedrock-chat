@@ -2,6 +2,7 @@
 Calculator tool. For testing and demonstration purposes only.
 """
 
+import ast
 import logging
 import math
 import operator
@@ -12,6 +13,63 @@ from strands import tool
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
+
+_SAFE_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+    ast.Mod: operator.mod,
+    ast.FloorDiv: operator.floordiv,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+_SAFE_FUNCS = {
+    "abs": abs,
+    "round": round,
+    "min": min,
+    "max": max,
+    "sum": sum,
+    "pow": pow,
+    "sqrt": math.sqrt,
+    "sin": math.sin,
+    "cos": math.cos,
+    "tan": math.tan,
+    "asin": math.asin,
+    "acos": math.acos,
+    "atan": math.atan,
+    "log": math.log,
+    "log10": math.log10,
+    "exp": math.exp,
+    "floor": math.floor,
+    "ceil": math.ceil,
+}
+
+_SAFE_CONSTANTS = {"pi": math.pi, "e": math.e}
+
+
+def _ast_eval(node: ast.expr) -> float:
+    """Recursively evaluate an AST node using only whitelisted operations."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return float(node.value)
+    elif isinstance(node, ast.Name) and node.id in _SAFE_CONSTANTS:
+        return _SAFE_CONSTANTS[node.id]
+    elif isinstance(node, ast.BinOp) and type(node.op) in _SAFE_OPS:
+        return _SAFE_OPS[type(node.op)](_ast_eval(node.left), _ast_eval(node.right))
+    elif isinstance(node, ast.UnaryOp) and type(node.op) in _SAFE_OPS:
+        return _SAFE_OPS[type(node.op)](_ast_eval(node.operand))
+    elif (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in _SAFE_FUNCS
+        and not node.keywords
+    ):
+        args = [_ast_eval(arg) for arg in node.args]
+        return _SAFE_FUNCS[node.func.id](*args)
+    else:
+        raise ValueError("Unsupported operation in expression")
 
 
 def create_calculator_tool(bot: BotModel | None = None):
@@ -38,42 +96,8 @@ def create_calculator_tool(bot: BotModel | None = None):
             # Replace common mathematical functions and constants
             expression = _prepare_expression(expression)
 
-            # Define safe operations
-            safe_dict = {
-                "__builtins__": {},
-                "abs": abs,
-                "round": round,
-                "min": min,
-                "max": max,
-                "sum": sum,
-                "pow": pow,
-                # Math functions
-                "sqrt": math.sqrt,
-                "sin": math.sin,
-                "cos": math.cos,
-                "tan": math.tan,
-                "asin": math.asin,
-                "acos": math.acos,
-                "atan": math.atan,
-                "log": math.log,
-                "log10": math.log10,
-                "exp": math.exp,
-                "floor": math.floor,
-                "ceil": math.ceil,
-                # Constants
-                "pi": math.pi,
-                "e": math.e,
-            }
-
-            # Validate expression for safety
-            if not _is_safe_expression(expression):
-                logger.warning(
-                    f"[CALCULATOR_V3] Unsafe expression detected: {expression}"
-                )
-                return f"Error: Expression contains unsafe operations: {expression}"
-
-            # Evaluate the expression
-            result = eval(expression, safe_dict, {})
+            # Evaluate using safe AST-based evaluator
+            result = _ast_eval(ast.parse(expression, mode="eval").body)
 
             # Format the result
             if isinstance(result, float):
@@ -189,33 +213,3 @@ def _prepare_expression(expression: str) -> str:
     return expression
 
 
-def _is_safe_expression(expression: str) -> bool:
-    """Check if expression is safe to evaluate."""
-    # List of dangerous patterns
-    dangerous_patterns = [
-        "__",  # Dunder methods
-        "import",
-        "exec",
-        "eval",
-        "open",
-        "file",
-        "input",
-        "raw_input",
-        "compile",
-        "globals",
-        "locals",
-        "vars",
-        "dir",
-        "hasattr",
-        "getattr",
-        "setattr",
-        "delattr",
-        "callable",
-    ]
-
-    expression_lower = expression.lower()
-    for pattern in dangerous_patterns:
-        if pattern in expression_lower:
-            return False
-
-    return True

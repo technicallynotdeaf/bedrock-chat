@@ -3,8 +3,9 @@ Calculator tool for mathematical calculations.
 The purpose of this tool is for testing.
 """
 
+import ast
 import logging
-import re
+import operator
 from typing import Any
 
 from app.agents.tools.agent_tool import AgentTool
@@ -14,6 +15,27 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+_SAFE_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+
+def _ast_eval(node: ast.expr) -> float:
+    """Recursively evaluate an AST node using only safe arithmetic operations."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return float(node.value)
+    elif isinstance(node, ast.BinOp) and type(node.op) in _SAFE_OPS:
+        return _SAFE_OPS[type(node.op)](_ast_eval(node.left), _ast_eval(node.right))
+    elif isinstance(node, ast.UnaryOp) and type(node.op) in _SAFE_OPS:
+        return _SAFE_OPS[type(node.op)](_ast_eval(node.operand))
+    else:
+        raise ValueError("Unsupported operation in expression")
 
 
 class CalculatorInput(BaseModel):
@@ -35,26 +57,8 @@ def calculate_expression(expression: str) -> str:
     logger.info(f"[CALCULATOR_TOOL] Calculating expression: {expression}")
 
     try:
-        # Clean the expression - remove spaces
-        cleaned_expression = expression.replace(" ", "")
-        logger.debug(f"[CALCULATOR_TOOL] Cleaned expression: {cleaned_expression}")
-
-        # Validate expression contains only allowed characters
-        if not re.match(r"^[0-9+\-*/().]+$", cleaned_expression):
-            logger.warning(
-                f"[CALCULATOR_TOOL] Invalid characters in expression: {expression}"
-            )
-            return "Error: Invalid characters in expression. Only numbers and basic operators (+, -, *, /, parentheses) are allowed."
-
-        # Check for division by zero
-        if "/0" in cleaned_expression:
-            logger.error(
-                f"[CALCULATOR_TOOL] Division by zero in expression: {expression}"
-            )
-            return "Error: Division by zero is not allowed."
-
-        # Safely evaluate the expression
-        result = eval(cleaned_expression)
+        tree = ast.parse(expression.strip(), mode="eval")
+        result = _ast_eval(tree.body)
         logger.debug(f"[CALCULATOR_TOOL] Calculation result: {result}")
 
         # Format the result
@@ -69,11 +73,14 @@ def calculate_expression(expression: str) -> str:
     except ZeroDivisionError:
         logger.error(f"[CALCULATOR_TOOL] Division by zero in expression: {expression}")
         return "Error: Division by zero is not allowed."
+    except (SyntaxError, ValueError) as e:
+        logger.warning(f"[CALCULATOR_TOOL] Invalid expression '{expression}': {e}")
+        return "Error: Invalid expression. Only basic arithmetic (+, -, *, /) and parentheses are supported."
     except Exception as e:
         logger.error(
             f"[CALCULATOR_TOOL] Error calculating expression '{expression}': {e}"
         )
-        return f"Error: Unable to calculate the expression. Please check the syntax."
+        return "Error: Unable to calculate the expression. Please check the syntax."
 
 
 def _calculator_function(

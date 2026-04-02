@@ -89,7 +89,25 @@ export class Api extends Construct {
     );
     handlerRole.addToPolicy(
       new iam.PolicyStatement({
-        actions: ["bedrock:*"],
+        actions: [
+          // bedrock-runtime: inference
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream",
+          "bedrock:Converse",
+          "bedrock:ConverseStream",
+          "bedrock:ApplyGuardrail",
+          // bedrock-agent-runtime: KB retrieval and agent invocation
+          "bedrock:Retrieve",
+          "bedrock:RetrieveAndGenerate",
+          "bedrock:InvokeAgent",
+          // bedrock-agent: KB metadata lookup
+          "bedrock:GetKnowledgeBase",
+          // bedrock: model discovery
+          "bedrock:ListFoundationModels",
+          "bedrock:GetFoundationModel",
+          "bedrock:ListInferenceProfiles",
+          "bedrock:GetInferenceProfile",
+        ],
         resources: ["*"],
       })
     );
@@ -115,7 +133,10 @@ export class Api extends Construct {
           "cloudformation:DescribeStackResources",
           "cloudformation:DeleteStack",
         ],
-        resources: [`*`],
+        resources: [
+          `arn:aws:cloudformation:${Stack.of(this).region}:${Stack.of(this).account}:stack/BrChatKbStack*/*`,
+          `arn:aws:cloudformation:${Stack.of(this).region}:${Stack.of(this).account}:stack/ApiPublishmentStack*/*`,
+        ],
       })
     );
     handlerRole.addToPolicy(
@@ -132,13 +153,13 @@ export class Api extends Construct {
     handlerRole.addToPolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
-        actions: [
-          "apigateway:GET",
-          "apigateway:POST",
-          "apigateway:PUT",
-          "apigateway:DELETE",
+        actions: ["apigateway:GET", "apigateway:POST", "apigateway:DELETE"],
+        resources: [
+          `arn:aws:apigateway:${Stack.of(this).region}::/usageplans`,
+          `arn:aws:apigateway:${Stack.of(this).region}::/usageplans/*`,
+          `arn:aws:apigateway:${Stack.of(this).region}::/apikeys`,
+          `arn:aws:apigateway:${Stack.of(this).region}::/apikeys/*`,
         ],
-        resources: [`arn:aws:apigateway:${Stack.of(this).region}::/*`],
       })
     );
     handlerRole.addToPolicy(
@@ -225,13 +246,8 @@ export class Api extends Construct {
           "secretsmanager:CreateSecret",
           "secretsmanager:GetSecretValue",
           "secretsmanager:DescribeSecret",
-          "secretsmanager:RestoreSecret",
-          "secretsmanager:PutSecretValue",
-          "secretsmanager:UpdateSecretVersionStage",
-          "secretsmanager:DeleteSecret",
-          "secretsmanager:RotateSecret",
-          "secretsmanager:CancelRotateSecret",
           "secretsmanager:UpdateSecret",
+          "secretsmanager:DeleteSecret",
           "secretsmanager:TagResource",
         ],
         resources: [

@@ -96,7 +96,21 @@ export class WebSocket extends Construct {
     );
     handlerRole.addToPolicy(
       new iam.PolicyStatement({
-        actions: ["bedrock:*"],
+        actions: [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream",
+          "bedrock:Converse",
+          "bedrock:ConverseStream",
+          "bedrock:ApplyGuardrail",
+          "bedrock:Retrieve",
+          "bedrock:RetrieveAndGenerate",
+          "bedrock:InvokeAgent",
+          "bedrock:GetKnowledgeBase",
+          "bedrock:ListFoundationModels",
+          "bedrock:GetFoundationModel",
+          "bedrock:ListInferenceProfiles",
+          "bedrock:GetInferenceProfile",
+        ],
         resources: ["*"],
       })
     );
