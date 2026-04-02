@@ -443,12 +443,15 @@ const useChat = () => {
     const createNewConversation = () => {
       // Copy State to prevent screen flicker
       copyMessages('', newConversationId);
+      // Set the conversation ID immediately so follow-up messages are sent to
+      // the same conversation. Previously this was deferred until after the
+      // title-generation API call resolved, causing any follow-up sent before
+      // that API returned to be treated as a brand-new conversation (isNewChat
+      // = true) and losing all prior context.
+      setConversationId(newConversationId);
 
       conversationApi
         .updateTitleWithGeneratedTitle(newConversationId)
-        .then(() => {
-          setConversationId(newConversationId);
-        })
         .finally(() => {
           syncConversations().then(() => {
             setIsGeneratedTitle(true);
