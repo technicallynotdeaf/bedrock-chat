@@ -384,10 +384,10 @@ const InputChatContent = forwardRef<HTMLElement, Props>(
         }
 
         if (!isExtractable(file.name)) {
-          // Non-extractable type (e.g. .doc) that is also over the limit
+          // Non-extractable type (e.g. .doc) — cannot be text-extracted
           open(
-            t('error.attachment.fileSizeExceeded', {
-              maxSize: `${MAX_FILE_SIZE_MB} MB`,
+            t('error.attachment.notExtractableAndTooLarge', {
+              nativeLimit: `${MAX_FILE_SIZE_MB} MB`,
             })
           );
           return;
