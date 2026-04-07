@@ -21,31 +21,41 @@
 const fs = require('fs');
 const path = require('path');
 
-const TARGET_DIR = path.join(
-  __dirname,
-  '..',
-  'node_modules',
-  '@aws-amplify',
-  'ui',
-  'dist',
-  'esm'
-);
-
-if (!fs.existsSync(TARGET_DIR)) {
-  console.log('[fix-amplify-xstate] @aws-amplify/ui ESM dir not found — skipping.');
-  process.exit(0);
-}
+const NODE_MODULES = path.join(__dirname, '..', 'node_modules');
 
 let patchedCount = 0;
 
-function patchDir(dir) {
+// Walk the entire node_modules tree and patch every .mjs file under any
+// @aws-amplify/ui/dist/esm/ directory, regardless of nesting depth.
+// npm may hoist @aws-amplify/ui to the root or nest it inside other packages
+// depending on peer-dep resolution; we cover both cases.
+function walk(dir) {
+  if (!fs.existsSync(dir)) return;
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+  catch { return; }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const fullPath = path.join(dir, entry.name);
+
+    if (entry.name === 'esm' && dir.endsWith(path.join('@aws-amplify', 'ui', 'dist'))) {
+      // We are inside an @aws-amplify/ui/dist/esm — patch every .mjs here
+      patchMjsFiles(fullPath);
+    } else {
+      walk(fullPath);
+    }
+  }
+}
+
+function patchMjsFiles(dir) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      patchDir(fullPath);
+      patchMjsFiles(fullPath);
     } else if (entry.isFile() && entry.name.endsWith('.mjs')) {
       const original = fs.readFileSync(fullPath, 'utf8');
-      // Replace bare `'xstate'` specifier but not `'xstate4'` (idempotent)
+      // Replace bare `'xstate'` specifier; leave `'xstate4'` untouched (idempotent)
       const patched = original.replace(/from 'xstate'(?!')/g, "from 'xstate4'");
       if (patched !== original) {
         fs.writeFileSync(fullPath, patched, 'utf8');
@@ -56,7 +66,7 @@ function patchDir(dir) {
   }
 }
 
-patchDir(TARGET_DIR);
+walk(NODE_MODULES);
 
 if (patchedCount > 0) {
   console.log(`[fix-amplify-xstate] Done — patched ${patchedCount} file(s).`);
