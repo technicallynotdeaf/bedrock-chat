@@ -4,6 +4,7 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
+    "postinstall": "node scripts/fix-amplify-xstate.cjs",
     "test": "vitest",
     "dev": "vite",
     "build": "tsc && vite build",

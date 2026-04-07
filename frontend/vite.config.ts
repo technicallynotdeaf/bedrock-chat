@@ -10,6 +10,12 @@ import path from 'path';
 // The Rollup plugin below redirects every `xstate` import that originates from
 // inside an `@aws-amplify` package to the `xstate4` alias, letting both
 // versions co-exist without conflicts.
+//
+// IMPORTANT: This plugin must be in the top-level `plugins` array (not inside
+// `build.rollupOptions.plugins`) so that it is active in ALL Rollup/Vite build
+// environments, including the secondary build that vite-plugin-pwa runs for the
+// service-worker injection bundle.  Moving it to rollupOptions.plugins caused
+// the [vite-plugin-pwa:build] pass to fail with '"actions" is not exported'.
 const fixAmplifyXstate = {
   name: 'fix-amplify-xstate',
   resolveId(source: string, importer: string | undefined) {
@@ -26,12 +32,8 @@ const fixAmplifyXstate = {
 // https://vitejs.dev/config/
 export default defineConfig({
   resolve: { alias: { './runtimeConfig': './runtimeConfig.browser' } },
-  build: {
-    rollupOptions: {
-      plugins: [fixAmplifyXstate],
-    },
-  },
   plugins: [
+    fixAmplifyXstate,
     react(),
     VitePWA({
       registerType: 'autoUpdate',
