@@ -804,6 +804,15 @@ const translation = {
           'Ukuran setiap dokumen tidak boleh lebih dari {{maxSize}}.',
         fileCountExceeded:
           'Tidak dapat mengunggah lebih dari {{maxCount}} file.',
+        tooLargeToExtract:
+          'File is too large to process. Maximum size is {{maxSize}}.',
+        notExtractableAndTooLarge:
+          'Files of this type over {{nativeLimit}} must be convertible to text. Please use PDF, DOCX, or XLSX format instead.',
+        extractionFailed:
+          'Could not extract text from this file. Please try a smaller file.',
+        extracting: 'Extracting text from large file…',
+        extracted:
+          'Large file converted to text for processing ({{originalSize}} → {{newSize}}).',
       },
     },
     validation: {

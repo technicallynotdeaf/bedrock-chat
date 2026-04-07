@@ -75,3 +75,9 @@ export const SUPPORTED_FILE_EXTENSIONS = [
 export const MAX_FILE_SIZE_MB = 4.5;
 export const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 export const MAX_ATTACHED_FILES = 5;
+
+// Files larger than MAX_FILE_SIZE_BYTES but smaller than this limit are
+// eligible for browser-side text extraction before being sent.
+export const MAX_EXTRACTABLE_FILE_SIZE_MB = 50;
+export const MAX_EXTRACTABLE_FILE_SIZE_BYTES =
+  MAX_EXTRACTABLE_FILE_SIZE_MB * 1024 * 1024;

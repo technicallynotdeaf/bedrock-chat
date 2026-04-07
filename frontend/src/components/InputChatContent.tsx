@@ -35,7 +35,14 @@ import {
   MAX_FILE_SIZE_MB,
   SUPPORTED_FILE_EXTENSIONS,
   MAX_ATTACHED_FILES,
+  MAX_EXTRACTABLE_FILE_SIZE_MB,
+  MAX_EXTRACTABLE_FILE_SIZE_BYTES,
 } from '../constants/supportedAttachedFiles';
+import {
+  extractTextFromFile,
+  isExtractable,
+  formatFileSize,
+} from '../utils/fileTextExtractor';
 
 type Props = BaseProps & {
   disabledSend?: boolean;
@@ -316,17 +323,8 @@ const InputChatContent = forwardRef<HTMLElement, Props>(
       [pushBase64EncodedImage, totalFileSizeToSend, open, t]
     );
 
-    const handleAttachedFileRead = useCallback(
-      (file: File) => {
-        if (file.size > MAX_FILE_SIZE_BYTES) {
-          open(
-            t('error.attachment.fileSizeExceeded', {
-              maxSize: `${MAX_FILE_SIZE_MB} MB`,
-            })
-          );
-          return;
-        }
-
+    const readFileAsBase64 = useCallback(
+      (file: File): void => {
         const reader = new FileReader();
         reader.onload = () => {
           if (reader.result instanceof ArrayBuffer) {
@@ -365,6 +363,52 @@ const InputChatContent = forwardRef<HTMLElement, Props>(
         reader.readAsArrayBuffer(file);
       },
       [pushTextFile, totalFileSizeToSend, open, t]
+    );
+
+    const handleAttachedFileRead = useCallback(
+      async (file: File) => {
+        if (file.size <= MAX_FILE_SIZE_BYTES) {
+          // File is within Bedrock's native limit — send as-is
+          readFileAsBase64(file);
+          return;
+        }
+
+        // File exceeds 4.5 MB: attempt browser-side text extraction
+        if (file.size > MAX_EXTRACTABLE_FILE_SIZE_BYTES) {
+          open(
+            t('error.attachment.tooLargeToExtract', {
+              maxSize: `${MAX_EXTRACTABLE_FILE_SIZE_MB} MB`,
+            })
+          );
+          return;
+        }
+
+        if (!isExtractable(file.name)) {
+          // Non-extractable type (e.g. .doc) — cannot be text-extracted
+          open(
+            t('error.attachment.notExtractableAndTooLarge', {
+              nativeLimit: `${MAX_FILE_SIZE_MB} MB`,
+            })
+          );
+          return;
+        }
+
+        open(t('error.attachment.extracting'));
+
+        try {
+          const extractedFile = await extractTextFromFile(file);
+          open(
+            t('error.attachment.extracted', {
+              originalSize: formatFileSize(file.size),
+              newSize: formatFileSize(extractedFile.size),
+            })
+          );
+          readFileAsBase64(extractedFile);
+        } catch {
+          open(t('error.attachment.extractionFailed'));
+        }
+      },
+      [readFileAsBase64, open, t]
     );
 
     useEffect(() => {
