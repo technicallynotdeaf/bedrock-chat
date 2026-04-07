@@ -765,6 +765,13 @@ const translation = {
       attachment: {
         fileSizeExceeded: 'ขนาดเอกสารแต่ละรายการต้องไม่เกิน {{maxSize}}',
         fileCountExceeded: 'ไม่สามารถอัปโหลดมากกว่า {{maxCount}} ไฟล์',
+        tooLargeToExtract:
+          'File is too large to process. Maximum size is {{maxSize}}.',
+        extractionFailed:
+          'Could not extract text from this file. Please try a smaller file.',
+        extracting: 'Extracting text from large file…',
+        extracted:
+          'Large file converted to text for processing ({{originalSize}} → {{newSize}}).',
       },
     },
     validation: {

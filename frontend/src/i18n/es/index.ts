@@ -724,6 +724,13 @@ Las categorías de clasificación son:
         fileSizeExceeded:
           'El tamaño de cada documento no debe superar {{maxSize}}.',
         fileCountExceeded: 'No se pudo subir más de {{maxCount}} archivos.',
+        tooLargeToExtract:
+          'File is too large to process. Maximum size is {{maxSize}}.',
+        extractionFailed:
+          'Could not extract text from this file. Please try a smaller file.',
+        extracting: 'Extracting text from large file…',
+        extracted:
+          'Large file converted to text for processing ({{originalSize}} → {{newSize}}).',
       },
     },
     validation: {

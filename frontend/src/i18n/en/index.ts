@@ -1047,6 +1047,13 @@ How would you categorize this email?`,
         fileSizeExceeded:
           'Each document size must be no more than {{maxSize}}.',
         fileCountExceeded: 'Could not upload more than {{maxCount}} files.',
+        tooLargeToExtract:
+          'File is too large to process. Maximum size is {{maxSize}}.',
+        extractionFailed:
+          'Could not extract text from this file. Please try a smaller file.',
+        extracting: 'Extracting text from large file…',
+        extracted:
+          'Large file converted to text for processing ({{originalSize}} → {{newSize}}).',
       },
       share: {
         markedEssential: {

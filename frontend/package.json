@@ -48,7 +48,10 @@
     "use-immer": "^0.9.0",
     "xstate": "^5.13.0",
     "xstate4": "npm:xstate@4.38.3",
-    "zustand": "^4.3.9"
+    "zustand": "^4.3.9",
+    "mammoth": "^1.8.0",
+    "pdfjs-dist": "^4.9.155",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.9",

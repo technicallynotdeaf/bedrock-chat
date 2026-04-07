@@ -1050,6 +1050,13 @@ const translation: typeof en = {
       attachment: {
         fileSizeExceeded: 'ファイルサイズは{{maxSize}}以下にしてください。',
         fileCountExceeded: 'ファイル数は{{maxCount}}以下にしてください。',
+        tooLargeToExtract:
+          'File is too large to process. Maximum size is {{maxSize}}.',
+        extractionFailed:
+          'Could not extract text from this file. Please try a smaller file.',
+        extracting: 'Extracting text from large file…',
+        extracted:
+          'Large file converted to text for processing ({{originalSize}} → {{newSize}}).',
       },
       cannotAccessBot:
         'このボットにアクセスできません。新しいチャットへリダイレクトしました。',

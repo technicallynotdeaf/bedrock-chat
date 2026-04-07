@@ -784,6 +784,13 @@ Bạn sẽ phân loại email này như thế nào?`,
       attachment: {
         fileSizeExceeded: 'Mỗi tệp không được vượt quá {{maxSize}}.',
         fileCountExceeded: 'Không thể tải lên quá {{maxCount}} tệp.',
+        tooLargeToExtract:
+          'File is too large to process. Maximum size is {{maxSize}}.',
+        extractionFailed:
+          'Could not extract text from this file. Please try a smaller file.',
+        extracting: 'Extracting text from large file…',
+        extracted:
+          'Large file converted to text for processing ({{originalSize}} → {{newSize}}).',
       },
     },
     validation: {
