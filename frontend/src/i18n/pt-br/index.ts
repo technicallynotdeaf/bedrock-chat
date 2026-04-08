@@ -173,9 +173,9 @@ const translation = {
           settings: 'Configurações de Busca',
           engine: 'Mecanismo de Busca',
           engines: {
-            duckduckgo: {
-              label: 'DuckDuckGo (Para Teste)',
-              hint: 'Taxa limitada, mas gratuita. Projetado para uso em testes.',
+            tavily: {
+              label: 'Tavily',
+              hint: 'Pesquisa otimizada por IA. Requer TAVILY_API_KEY. https://tavily.com/',
             },
             firecrawl: {
               label: 'Firecrawl (Para Negócios)',

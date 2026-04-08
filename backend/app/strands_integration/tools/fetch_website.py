@@ -18,9 +18,11 @@ from strands.types.tools import AgentTool as StrandsAgentTool
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# Maximum characters returned to the model to avoid flooding the context window
-MAX_CONTENT_CHARS_TAVILY = 20000  # Tavily returns clean content, allow more
-MAX_CONTENT_CHARS_FALLBACK = 8000  # Raw HTML stripping is noisier, keep tighter
+# Maximum characters returned to the model to avoid flooding the context window.
+# Lower limits reduce token costs in the agent loop where tool results are
+# resent to the model on every iteration.
+MAX_CONTENT_CHARS_TAVILY = 8000   # Tavily returns clean content
+MAX_CONTENT_CHARS_FALLBACK = 4000  # Raw HTML stripping is noisier, keep tighter
 REQUEST_TIMEOUT_SECONDS = 15
 
 

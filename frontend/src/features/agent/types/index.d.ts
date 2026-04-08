@@ -12,7 +12,7 @@ export type FirecrawlConfig = {
   maxResults: number;
 };
 
-export type SearchEngine = 'duckduckgo' | 'firecrawl';
+export type SearchEngine = 'tavily' | 'firecrawl';
 export type ToolType = 'internet' | 'plain' | 'bedrock_agent';
 
 export type BedrockAgentConfig = {

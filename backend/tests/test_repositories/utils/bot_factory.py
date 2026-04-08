@@ -70,7 +70,7 @@ def _create_test_bot_model(
                 tool_type="internet",
                 name=internet_search_tool.name,
                 description=internet_search_tool.description,
-                search_engine="duckduckgo",
+                search_engine="tavily",
             )
         )
     if include_calculator_tool:

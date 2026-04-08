@@ -82,9 +82,21 @@ def create_knowledge_search_tool(bot: BotModel | None) -> StrandsAgentTool:
             results = _search_knowledge_standalone(current_bot, query)
 
             logger.debug(f"[KNOWLEDGE_SEARCH_V3] Search completed successfully")
+
+            # Truncate result content to limit token usage in the agent
+            # loop. Each result's content can be thousands of chars;
+            # the model only needs enough to answer the question.
+            MAX_RESULT_CHARS = 2000
+            truncated_results = []
+            for result in results:
+                r = dict(result)
+                if isinstance(r.get("content"), str) and len(r["content"]) > MAX_RESULT_CHARS:
+                    r["content"] = r["content"][:MAX_RESULT_CHARS] + "..."
+                truncated_results.append(r)
+
             return {
                 "status": "success",
-                "content": [{"json": result} for result in results],
+                "content": [{"json": result} for result in truncated_results],
             }
 
         except Exception as e:

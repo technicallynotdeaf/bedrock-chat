@@ -54,5 +54,8 @@ def create_strands_agent(
         tools=get_strands_tools(bot, model_name),  # type: ignore
         hooks=hooks or [],
         system_prompt=system_prompt,
+        # Limit agent loop iterations to prevent runaway costs.
+        # Default is 50 which can cause $8+ requests with tool use.
+        max_iterations=6,
     )
     return agent

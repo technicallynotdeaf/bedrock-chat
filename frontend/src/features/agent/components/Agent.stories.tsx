@@ -35,7 +35,7 @@ export const Tools = () => {
       toolType: "internet",
       name: 'internet_search',
       description: '',
-      searchEngine: 'duckduckgo',
+      searchEngine: 'tavily',
     },
     {
       toolType: "plain",
