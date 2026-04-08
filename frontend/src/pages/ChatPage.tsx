@@ -549,7 +549,7 @@ const ChatPage: React.FC = () => {
             <div
               id="messages"
               role="presentation"
-              className="flex h-full flex-col overflow-auto pb-40">
+              className={`flex h-full flex-col overflow-auto ${messages?.length > 0 ? 'pb-40' : ''}`}>
 
               {/* Empty state */}
               {messages?.length === 0 && (
@@ -637,7 +637,7 @@ const ChatPage: React.FC = () => {
         className={twMerge(
           'bottom-0 z-10 flex w-full flex-col items-center',
           messages.length === 0
-            ? 'absolute top-1/2 -translate-y-1/4'
+            ? 'relative pb-4'
             : 'relative bg-gradient-to-t from-aws-paper-light via-aws-paper-light/90 to-transparent pb-4 pt-2 dark:from-aws-paper-dark dark:via-aws-paper-dark/90'
         )}>
 
