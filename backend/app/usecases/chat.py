@@ -246,19 +246,33 @@ def prepare_conversation(
     return (message_id, conversation, bot)
 
 
+# Maximum number of recent conversation turns (user+assistant pairs) to send
+# to the model. Older turns are dropped to reduce input token costs.
+# The most recent turn (current user message) is always included.
+MAX_HISTORY_TURNS = 20
+
+
 def trace_to_root(
     node_id: str | None, message_map: dict[str, MessageModel]
 ) -> list[SimpleMessageModel]:
-    """Trace message map from leaf node to root node."""
+    """Trace message map from leaf node to root node.
+
+    Only includes thinking_log tool use/results for the most recent 4 messages
+    to avoid sending massive tool histories from earlier in the conversation.
+    """
     result: list[SimpleMessageModel] = []
     if not node_id or node_id == "system":
         node_id = "instruction" if "instruction" in message_map else "system"
 
+    # First pass: collect all messages
+    all_nodes: list[SimpleMessageModel] = []
+    thinking_logs: list[list[SimpleMessageModel]] = []
     current_node = message_map.get(node_id)
     while current_node:
-        result.append(SimpleMessageModel.from_message_model(message=current_node))
+        all_nodes.append(SimpleMessageModel.from_message_model(message=current_node))
+        logs: list[SimpleMessageModel] = []
         if current_node.thinking_log:
-            result.extend(
+            logs = [
                 log
                 for log in reversed(current_node.thinking_log)
                 if any(
@@ -266,14 +280,67 @@ def trace_to_root(
                     or isinstance(content, ToolResultContentModel)
                     for content in log.content
                 )
-            )
+            ]
+        thinking_logs.append(logs)
 
         parent_id = current_node.parent
         if parent_id is None:
             break
         current_node = message_map.get(parent_id)
 
-    return result[::-1]
+    # Reverse to get chronological order (root → leaf)
+    all_nodes.reverse()
+    thinking_logs.reverse()
+
+    # Only include thinking logs for the last 4 messages (2 turns) to save tokens.
+    # Older tool use/results are not needed — the model already produced responses
+    # based on them.
+    for i, (node, logs) in enumerate(zip(all_nodes, thinking_logs)):
+        result.append(node)
+        if i >= len(all_nodes) - 4:
+            result.extend(logs)
+
+    # Apply sliding window: keep only the most recent turns
+    if len(result) > 0:
+        result = _apply_sliding_window(result, MAX_HISTORY_TURNS)
+
+    return result
+
+
+def _apply_sliding_window(
+    messages: list[SimpleMessageModel],
+    max_turns: int,
+) -> list[SimpleMessageModel]:
+    """Keep only the most recent `max_turns` user/assistant turn pairs.
+
+    Preserves the first message (instruction/system) and always includes
+    the current (last) user message.
+    """
+    if len(messages) <= 2:
+        return messages
+
+    # Count user messages (each represents roughly one turn)
+    user_count = sum(1 for m in messages if m.role == "user")
+    if user_count <= max_turns:
+        return messages
+
+    # Keep first message (instruction) + last N turns worth of messages
+    first_msg = messages[0] if messages[0].role != "user" else None
+    turns_kept = 0
+    cut_index = len(messages)
+
+    # Walk backwards counting user messages to find the cut point
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].role == "user":
+            turns_kept += 1
+            if turns_kept >= max_turns:
+                cut_index = i
+                break
+
+    recent = messages[cut_index:]
+    if first_msg is not None and cut_index > 0:
+        return [first_msg] + recent
+    return recent
 
 
 def _strip_attachments_from_history(
