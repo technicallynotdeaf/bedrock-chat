@@ -10,6 +10,7 @@ from app.repositories.models.custom_bot import BotModel, GenerationParamsModel
 from app.repositories.models.custom_bot_guardrails import BedrockGuardrailsModel
 from app.strands_integration.utils import get_strands_tools
 from strands import Agent
+from strands.agent.conversation_manager import SlidingWindowConversationManager
 from strands.hooks import HookProvider
 from strands.models import BedrockModel
 
@@ -49,13 +50,20 @@ def create_strands_agent(
     # Strands does not support list of instructions, so we join them into a single string.
     system_prompt = "\n\n".join(instructions).strip() if instructions else None
 
+    # Use a sliding window conversation manager to limit context growth during
+    # the agent tool-use loop. window_size=12 allows up to ~6 tool call rounds
+    # (each round = 1 assistant + 1 tool result message) before older messages
+    # are trimmed, preventing runaway token costs.
+    conversation_manager = SlidingWindowConversationManager(
+        window_size=12,
+        should_truncate_results=True,
+    )
+
     agent = Agent(
         model=model,
         tools=get_strands_tools(bot, model_name),  # type: ignore
         hooks=hooks or [],
         system_prompt=system_prompt,
-        # Limit agent loop iterations to prevent runaway costs.
-        # Default is 50 which can cause $8+ requests with tool use.
-        max_iterations=6,
+        conversation_manager=conversation_manager,
     )
     return agent
