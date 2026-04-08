@@ -18,6 +18,7 @@ import IconPinnedBot from './IconPinnedBot';
 type Props = BaseProps & {
   onlyIcon?: boolean;
   disabled?: boolean;
+  portal?: boolean;
   onClickEdit?: () => void;
   onClickCopyUrl?: () => void;
   onClickShare?: () => void;
@@ -57,7 +58,8 @@ const MenuBot: React.FC<Props> = (props) => {
         props.className
       )}
       target="bottom-right"
-      disabled={props.disabled}>
+      disabled={props.disabled}
+      portal={props.portal}>
       {props.onClickEdit && (
         <PopoverItem onClick={props.onClickEdit}>
           <PiPencilLine />

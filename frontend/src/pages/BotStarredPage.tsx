@@ -193,6 +193,7 @@ const BotStarredPage: React.FC = () => {
               </div>
               <div className="relative">
                 <MenuBot
+                  portal
                   {...(isAdmin && canBePinned(bot.sharedScope)
                     ? {
                         onClickSwitchPinned: () => {

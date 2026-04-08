@@ -226,6 +226,7 @@ const BotExplorePage: React.FC = () => {
               </Button>
               <div className="relative">
                 <MenuBot
+                  portal
                   onClickShare={() => {
                     onClickShare(bot.id);
                   }}
