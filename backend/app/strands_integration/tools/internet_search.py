@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 
@@ -53,7 +52,7 @@ def _search_with_duckduckgo_standalone(
         language, country = locale.split("-", 1)
         REGION = f"{country}-{language}".lower()
         SAFE_SEARCH = "moderate"
-        MAX_RESULTS = 20
+        MAX_RESULTS = 5
         BACKEND = "api"
 
         logger.info(
@@ -72,14 +71,13 @@ def _search_with_duckduckgo_standalone(
                 )
             )
 
-        # Format results for citation support
+        # Format results for citation support — use truncated content directly
+        # instead of making a separate model call per result
         formatted_results = []
         for result in results:
             formatted_results.append(
                 {
-                    "content": _summarize_content_standalone(
-                        result["body"], result["title"], result["href"], query
-                    ),
+                    "content": _truncate_content(result["body"]),
                     "source_name": result["title"],
                     "source_link": result["href"],
                 }
@@ -96,7 +94,7 @@ def _search_with_duckduckgo_standalone(
 
 
 def _search_with_firecrawl_standalone(
-    query: str, api_key: str, locale: str, max_results: int = 10
+    query: str, api_key: str, locale: str, max_results: int = 5
 ) -> list[dict[str, str]]:
     """Standalone Firecrawl search implementation."""
     try:
@@ -122,7 +120,7 @@ def _search_with_firecrawl_standalone(
             logger.warning("No results found from Firecrawl")
             return []
 
-        # Format results
+        # Format results — use truncated content directly
         formatted_results = []
         for data in results.data:
             if isinstance(data, dict):
@@ -137,9 +135,7 @@ def _search_with_firecrawl_standalone(
                 if title or content:
                     formatted_results.append(
                         {
-                            "content": _summarize_content_standalone(
-                                content, title, url, query
-                            ),
+                            "content": _truncate_content(content),
                             "source_name": title,
                             "source_link": url,
                         }
@@ -156,54 +152,19 @@ def _search_with_firecrawl_standalone(
         return []
 
 
-def _summarize_content_standalone(
-    content: str, title: str, url: str, query: str
-) -> str:
-    """Standalone content summarization."""
-    try:
-        from app.utils import get_bedrock_runtime_client
+def _truncate_content(content: str, max_chars: int = 1500) -> str:
+    """Truncate content to a reasonable size for the model context.
 
-        # Truncate content if too long
-        max_input_length = 8000
-        if len(content) > max_input_length:
-            content = content[:max_input_length] + "..."
-
-        client = get_bedrock_runtime_client()
-
-        prompt = f"""Please provide a concise summary of the following web content in 800-1500 tokens maximum. Focus on information that directly answers or relates to the user's query: "{query}"
-
-Title: {title}
-URL: {url}
-Content: {content}
-
-Summary:"""
-
-        response = client.invoke_model(
-            modelId="anthropic.claude-haiku-4-5-20251001",
-            contentType="application/json",
-            accept="application/json",
-            body=json.dumps(
-                {
-                    "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": 1500,
-                    "messages": [{"role": "user", "content": prompt}],
-                }
-            ),
-        )
-
-        response_body = json.loads(response["body"].read())
-        summary = response_body["content"][0]["text"].strip()
-
-        logger.info(
-            f"Summarized content from {len(content)} chars to {len(summary)} chars"
-        )
-        return summary
-
-    except Exception as e:
-        logger.error(f"Error summarizing content: {e}")
-        # Fallback: return truncated content
-        fallback_content = content[:1000] + "..." if len(content) > 1000 else content
-        return fallback_content
+    Previously this made a separate Haiku API call per search result to
+    summarize content, which added 5-10 extra Bedrock invocations per
+    internet search. Simple truncation is far more cost-effective — the
+    primary model can synthesize the information itself.
+    """
+    if not content:
+        return content
+    if len(content) <= max_chars:
+        return content
+    return content[:max_chars] + "..."
 
 
 def _search_with_tavily_standalone(
@@ -223,7 +184,7 @@ def _search_with_tavily_standalone(
 
         search_kwargs: dict = {
             "query": query,
-            "max_results": 10,
+            "max_results": 5,
             "include_answer": False,
             "include_raw_content": False,
         }
@@ -238,9 +199,8 @@ def _search_with_tavily_standalone(
             content = r.get("content", "")
             title = r.get("title", "")
             url = r.get("url", "")
-            summary = _summarize_content_standalone(content, title, url, query)
             formatted.append(
-                {"content": summary, "source_name": title, "source_link": url}
+                {"content": _truncate_content(content), "source_name": title, "source_link": url}
             )
 
         logger.info(f"Tavily search completed. Found {len(formatted)} results")

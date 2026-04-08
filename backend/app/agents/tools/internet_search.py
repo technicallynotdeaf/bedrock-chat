@@ -1,11 +1,9 @@
-import json
 import logging
 import os
 
 from app.agents.tools.agent_tool import AgentTool
 from app.repositories.models.custom_bot import BotModel, InternetToolModel
 from app.routes.schemas.conversation import type_model_name
-from app.utils import get_bedrock_runtime_client
 from firecrawl import FirecrawlApp
 from pydantic import BaseModel, Field, root_validator
 
@@ -61,54 +59,19 @@ class InternetSearchInput(BaseModel):
         return values
 
 
-def _summarize_content(content: str, title: str, url: str, query: str) -> str:
+def _truncate_content(content: str, max_chars: int = 1500) -> str:
+    """Truncate content to a reasonable size for the model context.
+
+    Previously this made a separate Haiku API call per search result to
+    summarize content, which added 5-10 extra Bedrock invocations per
+    internet search. Simple truncation is far more cost-effective — the
+    primary model can synthesize the information itself.
     """
-    Summarize content using Claude Haiku 4.5 to prevent context window bloat.
-    Returns a concise summary (800-1500 tokens max) preserving key information.
-    """
-    try:
-        client = get_bedrock_runtime_client()
-
-        # Truncate content if it's too long to avoid token limits
-        max_input_length = 8000  # Conservative limit for input
-        if len(content) > max_input_length:
-            content = content[:max_input_length] + "..."
-
-        prompt = f"""Please provide a concise summary of the following web content in 800-1500 tokens maximum. Focus on information that directly answers or relates to the user's query: "{query}"
-
-Title: {title}
-URL: {url}
-Content: {content}
-
-Summary:"""
-
-        response = client.invoke_model(
-            modelId="anthropic.claude-haiku-4-5-20251001",
-            contentType="application/json",
-            accept="application/json",
-            body=json.dumps(
-                {
-                    "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": 1500,
-                    "messages": [{"role": "user", "content": prompt}],
-                }
-            ),
-        )
-
-        response_body = json.loads(response["body"].read())
-        summary = response_body["content"][0]["text"].strip()
-
-        logger.info(
-            f"Summarized content from {len(content)} chars to {len(summary)} chars"
-        )
-        return summary
-
-    except Exception as e:
-        logger.error(f"Error summarizing content: {e}")
-        # Fallback: return truncated content if summarization fails
-        fallback_content = content[:1000] + "..." if len(content) > 1000 else content
-        logger.info(f"Using fallback content: {len(fallback_content)} chars")
-        return fallback_content
+    if not content:
+        return content
+    if len(content) <= max_chars:
+        return content
+    return content[:max_chars] + "..."
 
 
 def _search_with_tavily(query: str, time_limit: str, locale: str, api_key: str) -> list:
@@ -125,7 +88,7 @@ def _search_with_tavily(query: str, time_limit: str, locale: str, api_key: str) 
 
         search_kwargs: dict = {
             "query": query,
-            "max_results": 10,
+            "max_results": 5,
             "include_answer": False,
             "include_raw_content": False,
         }
@@ -137,21 +100,20 @@ def _search_with_tavily(query: str, time_limit: str, locale: str, api_key: str) 
 
         logger.info(f"Tavily search completed. Found {len(results)} results")
 
-        summarized_results = []
+        formatted_results = []
         for r in results:
             title = r.get("title", "")
             url = r.get("url", "")
             content = r.get("content", "")
-            summary = _summarize_content(content, title, url, query)
-            summarized_results.append(
+            formatted_results.append(
                 {
-                    "content": summary,
+                    "content": _truncate_content(content),
                     "source_name": title,
                     "source_link": url,
                 }
             )
 
-        return summarized_results
+        return formatted_results
 
     except Exception as e:
         logger.error(f"Tavily search error: {e}")
@@ -159,7 +121,7 @@ def _search_with_tavily(query: str, time_limit: str, locale: str, api_key: str) 
 
 
 def _search_with_firecrawl(
-    query: str, api_key: str, locale: str, max_results: int = 10
+    query: str, api_key: str, locale: str, max_results: int = 5
 ) -> list:
     logger.info(
         f"Searching with Firecrawl. Query: {query}, Max Results: {max_results}, Locale: {locale}"
@@ -168,8 +130,6 @@ def _search_with_firecrawl(
     try:
         app = FirecrawlApp(api_key=api_key)
 
-        # Search using Firecrawl
-        # SearchParams: https://github.com/mendableai/firecrawl/blob/main/apps/python-sdk/firecrawl/firecrawl.py#L24
         from firecrawl import ScrapeOptions
 
         # Incoming locale is language-country (e.g. 'en-us').
@@ -186,85 +146,38 @@ def _search_with_firecrawl(
             logger.warning("No results found")
             return []
 
-        # Log detailed information about the results object
-        logger.info(
-            f"results of firecrawl: success={getattr(results, 'success', 'unknown')} warning={getattr(results, 'warning', None)} error={getattr(results, 'error', None)}"
-        )
-
-        # Log the data structure
-        if hasattr(results, "data"):
-            data_sample = results.data[:1] if results.data else []
-            logger.info(f"data sample: {data_sample}")
-        else:
-            logger.info(
-                f"results attributes: {[attr for attr in dir(results) if not attr.startswith('_')]}"
-            )
-            logger.info(
-                f"results as dict attempt: {dict(results) if hasattr(results, '__dict__') else 'no __dict__'}"
-            )
-
-        # Format and summarize search results
-        search_results = []
-
         # Handle Firecrawl SearchResponse object structure
-        # The Python SDK returns a SearchResponse object with .data attribute
         if hasattr(results, "data") and results.data:
             data_list = results.data
         else:
-            logger.error(
-                f"No data found in results. Results type: {type(results)}, attributes: {[attr for attr in dir(results) if not attr.startswith('_')]}"
-            )
+            logger.error(f"No data found in results. Results type: {type(results)}")
             return []
 
-        logger.info(f"Found {len(data_list)} data items")
-        for i, data in enumerate(data_list):
-            try:
-                logger.info(
-                    f"Data item {i}: type={type(data)}, keys={list(data.keys()) if isinstance(data, dict) else 'not dict'}"
+        search_results = []
+        for data in data_list:
+            if isinstance(data, dict):
+                title = data.get("title", "")
+                url = data.get("url", "") or (
+                    data.get("metadata", {}).get("sourceURL", "")
+                    if isinstance(data.get("metadata"), dict)
+                    else ""
                 )
+                content = data.get("markdown", "") or data.get("content", "")
 
-                if isinstance(data, dict):
-                    title = data.get("title", "")
-                    # Try different URL fields based on Firecrawl API response structure
-                    url = data.get("url", "") or (
-                        data.get("metadata", {}).get("sourceURL", "")
-                        if isinstance(data.get("metadata"), dict)
-                        else ""
-                    )
-                    content = data.get("markdown", "") or data.get("content", "")
-
-                    if not title and not content:
-                        logger.warning(f"Skipping data item {i} - no title or content")
-                        continue
-
-                    # Summarize the content
-                    summary = _summarize_content(content, title, url, query)
-
+                if title or content:
                     search_results.append(
                         {
-                            "content": summary,
+                            "content": _truncate_content(content),
                             "source_name": title,
                             "source_link": url,
                         }
                     )
-                else:
-                    logger.warning(f"Data item {i} is not a dict: {type(data)}")
-            except Exception as e:
-                logger.error(f"Error processing data item {i}: {e}")
-                continue
 
         logger.info(f"Found {len(search_results)} results from Firecrawl")
         return search_results
 
     except Exception as e:
         logger.error(f"Error searching with Firecrawl: {e}")
-        logger.error(f"Exception type: {type(e)}")
-        logger.error(f"Exception args: {e.args}")
-        import traceback
-
-        logger.error(f"Traceback: {traceback.format_exc()}")
-
-        # Instead of raising, return empty list to allow fallback
         return []
 
 
