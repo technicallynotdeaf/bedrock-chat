@@ -215,9 +215,9 @@ const translation = {
           settings: 'Search Settings',
           engine: 'Search Engine',
           engines: {
-            duckduckgo: {
-              label: 'DuckDuckGo (For Trial)',
-              hint: 'Limited rate, but free to use. Designed for trial use.',
+            tavily: {
+              label: 'Tavily',
+              hint: 'AI-optimised search. Requires TAVILY_API_KEY. https://tavily.com/',
             },
             firecrawl: {
               label: 'Firecrawl (For Business)',

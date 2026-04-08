@@ -181,8 +181,16 @@ class InternetToolModel(BaseModel):
     )
     name: str
     description: str
-    search_engine: Optional[Literal["duckduckgo", "firecrawl"]]
+    search_engine: Optional[Literal["tavily", "firecrawl"]]
     firecrawl_config: Optional[FirecrawlConfigModel] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_search_engine(cls, data):
+        """Migrate legacy 'duckduckgo' search engine to 'tavily'."""
+        if isinstance(data, dict) and data.get("search_engine") == "duckduckgo":
+            data["search_engine"] = "tavily"
+        return data
 
     @model_validator(mode="before")
     @classmethod

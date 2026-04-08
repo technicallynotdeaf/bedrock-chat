@@ -431,7 +431,7 @@ class TestFetchAvailableAgentTools(unittest.TestCase):
         self.assertEqual(len(internet_tools), 1)
         self.assertIsInstance(internet_tools[0], InternetTool)
         self.assertEqual(internet_tools[0].tool_type, "internet")
-        self.assertEqual(internet_tools[0].search_engine, "duckduckgo")
+        self.assertEqual(internet_tools[0].search_engine, "tavily")
 
     def test_fetch_available_agent_tools_descriptions(self):
         """Test tool descriptions are properly extracted and print them"""

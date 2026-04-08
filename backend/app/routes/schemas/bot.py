@@ -111,12 +111,15 @@ class InternetTool(BaseSchema):
     tool_type: Literal["internet"]
     name: str
     description: str
-    search_engine: Optional[Literal["duckduckgo", "firecrawl"]]
+    search_engine: Optional[Literal["tavily", "firecrawl"]]
     firecrawl_config: Optional[FirecrawlConfig] | None = None
 
-    @field_validator("search_engine")
+    @field_validator("search_engine", mode="before")
     def validate_search_engine(cls, v):
-        if v not in ["duckduckgo", "firecrawl"]:
+        # Migrate legacy value
+        if v == "duckduckgo":
+            return "tavily"
+        if v not in ["tavily", "firecrawl", None]:
             raise ValueError(f"Invalid search engine: {v}")
         return v
 

@@ -29,7 +29,7 @@ type Props = {
 
 export const AvailableTools = ({ availableTools, tools, setTools }: Props) => {
   const { t } = useTranslation();
-  const [searchEngine, setSearchEngine] = useState<SearchEngine>('duckduckgo');
+  const [searchEngine, setSearchEngine] = useState<SearchEngine>('tavily');
 
   const handleChangeTool = useCallback(
     (tool: AgentTool) => () => {
@@ -47,7 +47,7 @@ export const AvailableTools = ({ availableTools, tools, setTools }: Props) => {
                   ...tool,
                   toolType: 'internet' as ToolType,
                   name: 'internet_search',
-                  searchEngine: searchEngine || 'duckduckgo',
+                  searchEngine: searchEngine || 'tavily',
                 } as AgentTool,
               ];
 
@@ -98,7 +98,7 @@ export const AvailableTools = ({ availableTools, tools, setTools }: Props) => {
               name: 'internet_search',
               searchEngine: isInternetTool(tool)
                 ? tool.searchEngine
-                : 'duckduckgo',
+                : 'tavily',
               firecrawlConfig: config,
             } as AgentTool;
           }
@@ -223,16 +223,16 @@ export const AvailableTools = ({ availableTools, tools, setTools }: Props) => {
                     <div className="flex flex-col gap-2">
                       <RadioButton
                         name="searchEngine"
-                        value="duckduckgo"
-                        checked={searchEngine === 'duckduckgo'}
+                        value="tavily"
+                        checked={searchEngine === 'tavily'}
                         label={t(
-                          'agent.tools.internet_search.engines.duckduckgo.label'
+                          'agent.tools.internet_search.engines.tavily.label'
                         )}
                         onChange={handleSearchEngineChange}
                       />
                       <div className="ml-6 text-sm text-aws-font-color-light/50 dark:text-aws-font-color-dark">
                         {t(
-                          'agent.tools.internet_search.engines.duckduckgo.hint'
+                          'agent.tools.internet_search.engines.tavily.hint'
                         )}
                       </div>
                     </div>

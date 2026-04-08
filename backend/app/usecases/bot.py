@@ -695,7 +695,7 @@ def fetch_available_agent_tools() -> list[Tool]:
                         tool_type="internet",
                         name=tool.tool_name,
                         description=description,
-                        search_engine="duckduckgo",
+                        search_engine="tavily",
                     )
                 )
             else:
@@ -727,7 +727,7 @@ def fetch_available_agent_tools() -> list[Tool]:
                         tool_type="internet",
                         name=legacy_tool.name,
                         description=legacy_tool.description,
-                        search_engine="duckduckgo",
+                        search_engine="tavily",
                     )
                 )
             else:

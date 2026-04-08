@@ -88,7 +88,7 @@ def _search_with_tavily(query: str, time_limit: str, locale: str, api_key: str) 
 
         search_kwargs: dict = {
             "query": query,
-            "max_results": 5,
+            "max_results": 10,
             "include_answer": False,
             "include_raw_content": False,
         }

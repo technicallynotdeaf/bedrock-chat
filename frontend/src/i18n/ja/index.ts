@@ -216,9 +216,9 @@ const translation: typeof en = {
           settings: '検索設定',
           engine: '検索エンジン',
           engines: {
-            duckduckgo: {
-              label: 'DuckDuckGo (For Trial)',
-              hint: 'リミットレートが厳しいが無料で使用可能。小規模利用向け',
+            tavily: {
+              label: 'Tavily',
+              hint: 'AI最適化検索。TAVILY_API_KEYが必要です。https://tavily.com/',
             },
             firecrawl: {
               label: 'Firecrawl (For Business)',
