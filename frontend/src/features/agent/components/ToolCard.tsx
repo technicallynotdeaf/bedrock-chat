@@ -7,7 +7,9 @@ import {
   PiCaretUp,
   PiCheckCircle,
   PiCircleNotch,
+  PiGlobe,
   PiLinkBold,
+  PiMagnifyingGlass,
   PiXCircle,
 } from 'react-icons/pi';
 import { twMerge } from 'tailwind-merge';
@@ -152,6 +154,30 @@ const ToolCard: React.FC<ToolCardProps> = ({
     return documents;
   }, [relatedDocuments, resultContents, toolUseId, name]);
 
+  // Tools that benefit from showing a search/URL preview in the header
+  const SEARCH_TOOLS = ['internet_search', 'tavily_extract', 'tavily_crawl', 'knowledge_base_tool'];
+  const isSearchTool = SEARCH_TOOLS.includes(name);
+
+  // Extract the key preview text to show in the header
+  const searchPreview = useMemo(() => {
+    if (!isSearchTool || !input) return null;
+    if (name === 'internet_search' && input.query) {
+      return { label: input.query as string, icon: 'search' as const };
+    }
+    if (name === 'tavily_extract' && input.urls) {
+      const urls = input.urls as string[];
+      if (urls.length === 1) return { label: urls[0], icon: 'globe' as const };
+      return { label: `${urls.length} URLs`, icon: 'globe' as const };
+    }
+    if (name === 'tavily_crawl' && input.url) {
+      return { label: input.url as string, icon: 'globe' as const };
+    }
+    if (name === 'knowledge_base_tool' && input.query) {
+      return { label: input.query as string, icon: 'search' as const };
+    }
+    return null;
+  }, [isSearchTool, name, input]);
+
   const [viewingRelatedDocument, setViewingRelatedDocument] = useState<RelatedDocument>();
 
   const ToolResultDocument: React.FC<{
@@ -211,17 +237,29 @@ const ToolCard: React.FC<ToolCardProps> = ({
       <div
         className="flex cursor-pointer items-center justify-between p-2 dark:text-aws-font-color-dark hover:bg-light-gray dark:hover:bg-aws-font-color-dark/10"
         onClick={handleToggleExpand}>
-        <div className="flex items-center text-base">
-          {status === 'running' && (
-            <PiCircleNotch className="mr-2 animate-spin text-aws-aqua" />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex items-center text-base">
+            {status === 'running' && (
+              <PiCircleNotch className="mr-2 shrink-0 animate-spin text-aws-aqua" />
+            )}
+            {status === 'success' && (
+              <PiCheckCircle className="mr-2 shrink-0 text-aws-aqua" />
+            )}
+            {status === 'error' && <PiXCircle className="mr-2 shrink-0 text-red" />}
+            <h3 className="">{getAgentName(name, t)}</h3>
+          </div>
+          {searchPreview && (
+            <div className="ml-6 flex items-center gap-1 text-xs text-aws-font-color-light/60 dark:text-aws-font-color-dark/60">
+              {searchPreview.icon === 'search' ? (
+                <PiMagnifyingGlass className="shrink-0" />
+              ) : (
+                <PiGlobe className="shrink-0" />
+              )}
+              <span className="truncate">{searchPreview.label}</span>
+            </div>
           )}
-          {status === 'success' && (
-            <PiCheckCircle className="mr-2 text-aws-aqua" />
-          )}
-          {status === 'error' && <PiXCircle className="mr-2  text-red" />}
-          <h3 className="">{getAgentName(name, t)}</h3>
         </div>
-        <div>
+        <div className="shrink-0 ml-2">
           {isExpanded ? (
             <PiCaretUp className="text-lg" />
           ) : (
@@ -229,6 +267,34 @@ const ToolCard: React.FC<ToolCardProps> = ({
           )}
         </div>
       </div>
+
+      {/* Compact source links preview (visible without expanding for search tools) */}
+      {isSearchTool && !isExpanded && status === 'success' && displayDocuments && displayDocuments.length > 0 && (
+        <div className="flex flex-wrap gap-1 px-2 pb-2">
+          {displayDocuments.slice(0, 5).map((doc, idx) => (
+            doc.sourceLink ? (
+              <a
+                key={doc.sourceId || idx}
+                className="inline-flex items-center gap-0.5 rounded-full bg-light-gray/50 dark:bg-aws-font-color-dark/10 px-2 py-0.5 text-[11px] text-aws-sea-blue-light dark:text-aws-sea-blue-dark hover:underline cursor-pointer"
+                onClick={(e) => { e.stopPropagation(); window.open(doc.sourceLink, '_blank'); }}
+                title={doc.sourceLink}
+              >
+                <PiGlobe className="shrink-0 text-xs" />
+                <span className="max-w-[180px] truncate">
+                  {(() => {
+                    try { return new URL(doc.sourceLink).hostname; } catch { return doc.sourceLink; }
+                  })()}
+                </span>
+              </a>
+            ) : null
+          ))}
+          {displayDocuments.length > 5 && (
+            <span className="inline-flex items-center px-2 py-0.5 text-[11px] text-aws-font-color-light/50 dark:text-aws-font-color-dark/50">
+              +{displayDocuments.length - 5} more
+            </span>
+          )}
+        </div>
+      )}
 
       <div
         className={twMerge(

@@ -117,6 +117,16 @@ const translation = {
           name: 'Carian Internet',
           description: 'Cari maklumat di internet.',
         },
+        tavily_extract: {
+          name: 'Ekstrak Kandungan Web',
+          description:
+            'Ekstrak kandungan penuh dari URL tertentu. Memerlukan TAVILY_API_KEY.',
+        },
+        tavily_crawl: {
+          name: 'Rangkak Laman Web',
+          description:
+            'Rangkak laman web dan ekstrak kandungan dari pelbagai halaman. Memerlukan TAVILY_API_KEY.',
+        },
         knowledge_base_tool: {
           name: 'Dapatkan Pengetahuan',
           description: 'Dapatkan maklumat dari pengetahuan.',

@@ -126,6 +126,16 @@ const translation = {
           name: 'Wyszukiwanie w Internecie',
           description: 'Wyszukaj informacje w internecie.',
         },
+        tavily_extract: {
+          name: 'Wyodrębnij Treść',
+          description:
+            'Wyodrębnij pełną treść z określonych adresów URL. Wymaga TAVILY_API_KEY.',
+        },
+        tavily_crawl: {
+          name: 'Przeszukaj Stronę',
+          description:
+            'Przeszukaj stronę internetową i wyodrębnij treść z wielu podstron. Wymaga TAVILY_API_KEY.',
+        },
         knowledge_base_tool: {
           name: 'Pobierz Wiedzę',
           description: 'Pobierz informacje z Bazy Wiedzy.',
