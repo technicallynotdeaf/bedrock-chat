@@ -7,24 +7,48 @@ import path from 'path';
 // project's streaming state machine needs xstate v5 (`setup` / `assign` API).
 // `xstate4` is an npm alias ("xstate4": "npm:xstate@4.38.3") installed as a
 // direct dependency so it is always present after `npm ci`.
-// The Rollup plugin below redirects every `xstate` import that originates from
-// inside an `@aws-amplify` package to the `xstate4` alias, letting both
-// versions co-exist without conflicts.
+//
+// Without intervention, the Amplify packages resolve to their own nested
+// node_modules/xstate (v4) while the postinstall-patched files import from
+// `xstate4` — creating TWO separate xstate v4 module instances in the bundle.
+// When two copies exist, the Authenticator's xstate interpreter and state
+// machine use different class identities, which silently breaks the auth state
+// machine (sign-in and sign-out do nothing).
+//
+// Fix: resolve the `xstate4` alias to its absolute entry point once, then
+// redirect every bare `xstate` import from any `@aws-amplify` (or nested
+// `@xstate/react`) package to that single file path.  This guarantees ONE
+// xstate v4 instance in the final bundle.
 //
 // IMPORTANT: This plugin must be in the top-level `plugins` array (not inside
 // `build.rollupOptions.plugins`) so that it is active in ALL Rollup/Vite build
 // environments, including the secondary build that vite-plugin-pwa runs for the
-// service-worker injection bundle.  Moving it to rollupOptions.plugins caused
-// the [vite-plugin-pwa:build] pass to fail with '"actions" is not exported'.
+// service-worker injection bundle.
+// Resolve the xstate4 ESM entry to a single absolute path.  All Amplify
+// xstate imports will be rewritten to this path so only ONE copy ends up in
+// the bundle.  Using the ESM entry (`es/index.js`) is critical — the CJS
+// entry would be treated as a separate module by Vite.
+const xstate4Esm = path.resolve(
+  __dirname,
+  'node_modules',
+  'xstate4',
+  'es',
+  'index.js',
+);
 const fixAmplifyXstate = {
   name: 'fix-amplify-xstate',
+  enforce: 'pre' as const,
   resolveId(source: string, importer: string | undefined) {
-    if (
-      source === 'xstate' &&
-      importer &&
-      importer.includes(path.join('node_modules', '@aws-amplify'))
-    ) {
-      return 'xstate4';
+    if (source === 'xstate' && importer) {
+      // Redirect xstate imports from any @aws-amplify package or any package
+      // nested under @aws-amplify (e.g. @xstate/react inside ui-react-core)
+      if (importer.includes(path.join('node_modules', '@aws-amplify'))) {
+        return xstate4Esm;
+      }
+    }
+    // Catch xstate4 bare specifier (from postinstall-patched files)
+    if (source === 'xstate4') {
+      return xstate4Esm;
     }
   },
 };
