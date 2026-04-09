@@ -28,9 +28,13 @@ def get_strands_registered_tools(bot: BotModel | None = None) -> list[StrandsAge
         create_internet_search_tool,
     )
     from app.strands_integration.tools.s3_file_ops import create_s3_file_ops_tools
+    from app.strands_integration.tools.tavily_crawl import create_tavily_crawl_tool
+    from app.strands_integration.tools.tavily_extract import create_tavily_extract_tool
 
     tools: list[StrandsAgentTool] = []
     tools.append(create_internet_search_tool(bot))
+    tools.append(create_tavily_extract_tool(bot))
+    tools.append(create_tavily_crawl_tool(bot))
     tools.append(create_bedrock_agent_tool(bot))
     tools.append(create_fetch_website_tool(bot))
     tools.append(create_image_generation_tool(bot))

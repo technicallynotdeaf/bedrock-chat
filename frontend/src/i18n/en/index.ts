@@ -225,6 +225,16 @@ const translation = {
             },
           },
         },
+        tavily_extract: {
+          name: 'Extract Web Content',
+          description:
+            'Extract full content from specific URLs. Requires TAVILY_API_KEY.',
+        },
+        tavily_crawl: {
+          name: 'Crawl Website',
+          description:
+            'Crawl a website and extract content from multiple pages. Requires TAVILY_API_KEY.',
+        },
         knowledge_base_tool: {
           name: 'Retrieve Knowledge',
           description: 'Retrieve information from knowledge.',
