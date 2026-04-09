@@ -167,7 +167,7 @@ class ConverseApiStreamHandler:
     @retry(
         exceptions=(BedrockThrottlingException,),
         tries=3,
-        delay=60,
+        delay=2,
         backoff=2,
         jitter=(0, 2),
         logger=logger,
