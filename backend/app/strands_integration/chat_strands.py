@@ -20,7 +20,7 @@ from app.strands_integration.converters import (
     strands_message_to_simple_message_model,
     strands_message_to_message_model,
 )
-from app.strands_integration.handlers import ToolResultCapture, create_callback_handler
+from app.strands_integration.handlers import MaxTurnsHook, ToolResultCapture, create_callback_handler
 from app.stream import OnStopInput, OnThinking
 from app.utils import get_current_time
 from app.vector_search import (
@@ -81,6 +81,7 @@ def converse_with_strands(
         on_thinking=on_thinking,
         on_tool_result=on_tool_result,
     )
+    max_turns_hook = MaxTurnsHook(max_tool_calls=10)
 
     prompt_caching_enabled = bot.prompt_caching_enabled if bot is not None else True
     has_tools = bot is not None and bot.is_agent_enabled()
@@ -94,7 +95,7 @@ def converse_with_strands(
         enable_reasoning=chat_input.enable_reasoning,
         prompt_caching_enabled=prompt_caching_enabled,
         has_tools=has_tools,
-        hooks=[tool_capture],
+        hooks=[tool_capture, max_turns_hook],
     )
 
     thinking_log: list[SimpleMessageModel] = []
