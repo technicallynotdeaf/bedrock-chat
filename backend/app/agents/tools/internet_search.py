@@ -184,8 +184,7 @@ def _search_with_firecrawl(
 def _internet_search(
     tool_input: InternetSearchInput, bot: BotModel | None, model: type_model_name | None
 ) -> list:
-    from app.pdf_url_handler import download_pdfs_from_urls
-    from app.repositories.models.conversation import DocumentToolResultModel
+    from app.pdf_url_handler import download_and_extract_pdf_texts
 
     query = tool_input.query
     time_limit = tool_input.time_limit
@@ -200,21 +199,20 @@ def _internet_search(
         logger.info("Using Tavily for internet search")
         results = _search_with_tavily(query, time_limit, locale, TAVILY_API_KEY)
         if results:
-            # Download any PDFs found in search result URLs and include as documents
+            # Extract text from any PDFs found in search result URLs
             source_urls = [r["source_link"] for r in results if r.get("source_link")]
-            pdf_downloads = download_pdfs_from_urls(source_urls)
-            if pdf_downloads:
-                for filename, pdf_bytes, source_url in pdf_downloads:
-                    results.append(
-                        DocumentToolResultModel(
-                            format="pdf",
-                            name=filename.replace(".pdf", "").replace(".", "")[:50],
-                            document=pdf_bytes,
-                        )
-                    )
-                    logger.info(
-                        f"Included PDF document from search result: {source_url}"
-                    )
+            pdf_texts = download_and_extract_pdf_texts(source_urls)
+            for filename, text, source_url in pdf_texts:
+                results.append(
+                    {
+                        "content": text,
+                        "source_name": f"[PDF] {filename}",
+                        "source_link": source_url,
+                    }
+                )
+                logger.info(
+                    f"Included extracted text from PDF: {source_url} ({len(text)} chars)"
+                )
             return results
         logger.warning("Tavily returned no results")
         return []

@@ -18,11 +18,11 @@ MAX_PDF_SIZE_BYTES = int(os.environ.get("MAX_PDF_URL_SIZE_BYTES", 4_500_000))
 # Timeout for downloading PDFs (seconds)
 PDF_DOWNLOAD_TIMEOUT = int(os.environ.get("PDF_DOWNLOAD_TIMEOUT", 30))
 
-# Maximum total PDF pages to include (Bedrock ConverseStream has a 100-page limit)
-MAX_TOTAL_PDF_PAGES = int(os.environ.get("MAX_TOTAL_PDF_PAGES", 80))
-
 # Maximum number of PDFs to download per search
 MAX_PDF_DOWNLOADS = int(os.environ.get("MAX_PDF_DOWNLOADS", 5))
+
+# Maximum characters of extracted text to keep per PDF (~3,000 tokens)
+MAX_PDF_TEXT_CHARS = int(os.environ.get("MAX_PDF_TEXT_CHARS", 12_000))
 
 # Regex to find URLs ending in .pdf (case-insensitive), handling optional query params
 PDF_URL_PATTERN = re.compile(
@@ -100,16 +100,34 @@ def download_pdf(url: str) -> tuple[str, bytes] | None:
         return None
 
 
-def count_pdf_pages(content: bytes) -> int:
-    """Count the number of pages in a PDF. Returns 0 on failure."""
+def extract_text_from_pdf(content: bytes, max_chars: int = 0) -> str:
+    """Extract text from PDF bytes using pypdf.
+
+    Returns extracted text truncated to max_chars (0 = use MAX_PDF_TEXT_CHARS).
+    """
+    if max_chars <= 0:
+        max_chars = MAX_PDF_TEXT_CHARS
     try:
         from pypdf import PdfReader
 
         reader = PdfReader(io.BytesIO(content))
-        return len(reader.pages)
+        texts: list[str] = []
+        total = 0
+        for i, page in enumerate(reader.pages):
+            page_text = page.extract_text() or ""
+            if not page_text.strip():
+                continue
+            texts.append(page_text)
+            total += len(page_text)
+            if total >= max_chars:
+                break
+        extracted = "\n\n".join(texts)
+        if len(extracted) > max_chars:
+            extracted = extracted[:max_chars] + "..."
+        return extracted
     except Exception as e:
-        logger.warning(f"Could not count PDF pages: {e}")
-        return 0
+        logger.warning(f"Failed to extract text from PDF: {e}")
+        return ""
 
 
 def is_pdf_url(url: str) -> bool:
@@ -121,16 +139,15 @@ def is_pdf_url(url: str) -> bool:
     return path.endswith(".pdf")
 
 
-def download_pdfs_from_urls(urls: list[str]) -> list[tuple[str, bytes, str]]:
-    """Download PDFs from a list of URLs. Only attempts URLs that look like PDFs.
+def download_and_extract_pdf_texts(urls: list[str]) -> list[tuple[str, str, str]]:
+    """Download PDFs from URLs and extract their text content.
 
-    Enforces limits on total page count (MAX_TOTAL_PDF_PAGES) and number of
-    PDFs (MAX_PDF_DOWNLOADS) to stay within Bedrock's 100-page document limit.
+    Text extraction avoids Bedrock's 100-page PDF document limit entirely
+    by passing content as text blocks instead of document blocks.
 
-    Returns a list of (filename, content_bytes, source_url) tuples for successful downloads.
+    Returns a list of (filename, extracted_text, source_url) tuples.
     """
-    results: list[tuple[str, bytes, str]] = []
-    total_pages = 0
+    results: list[tuple[str, str, str]] = []
 
     for url in urls:
         if not is_pdf_url(url):
@@ -143,19 +160,18 @@ def download_pdfs_from_urls(urls: list[str]) -> list[tuple[str, bytes, str]]:
             break
 
         pdf_result = download_pdf(url)
-        if pdf_result is not None:
-            filename, content = pdf_result
-            pages = count_pdf_pages(content)
-            if pages > 0 and total_pages + pages > MAX_TOTAL_PDF_PAGES:
-                logger.warning(
-                    f"Skipping PDF {filename} ({pages} pages) — would exceed "
-                    f"page limit ({total_pages} + {pages} > {MAX_TOTAL_PDF_PAGES})."
-                )
-                continue
-            total_pages += pages
-            results.append((filename, content, url))
-            logger.info(
-                f"Included PDF {filename} ({pages} pages). Total pages so far: {total_pages}"
-            )
+        if pdf_result is None:
+            continue
+
+        filename, content = pdf_result
+        text = extract_text_from_pdf(content)
+        if not text.strip():
+            logger.warning(f"No text extracted from PDF {filename}, skipping.")
+            continue
+
+        results.append((filename, text, url))
+        logger.info(
+            f"Extracted {len(text)} chars from PDF {filename}"
+        )
 
     return results
