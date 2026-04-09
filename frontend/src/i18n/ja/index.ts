@@ -226,6 +226,16 @@ const translation: typeof en = {
             },
           },
         },
+        tavily_extract: {
+          name: 'Webコンテンツ抽出',
+          description:
+            '指定URLからコンテンツを抽出します。TAVILY_API_KEYが必要です。',
+        },
+        tavily_crawl: {
+          name: 'Webサイトクロール',
+          description:
+            'Webサイトをクロールして複数ページからコンテンツを抽出します。TAVILY_API_KEYが必要です。',
+        },
         knowledge_base_tool: {
           name: 'ナレッジの取得',
           description: 'ナレッジから情報を取得します。',

@@ -183,6 +183,16 @@ const translation = {
             },
           },
         },
+        tavily_extract: {
+          name: 'Extrair Conteúdo Web',
+          description:
+            'Extraia conteúdo completo de URLs específicas. Requer TAVILY_API_KEY.',
+        },
+        tavily_crawl: {
+          name: 'Rastrear Site',
+          description:
+            'Rastreie um site e extraia conteúdo de várias páginas. Requer TAVILY_API_KEY.',
+        },
         knowledge_base_tool: {
           name: 'Recuperar Conhecimento',
           description: 'Recupere informações do conhecimento.',

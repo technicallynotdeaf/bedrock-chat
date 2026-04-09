@@ -128,6 +128,16 @@ const translation = {
           name: 'Tìm kiếm Internet',
           description: 'Tìm kiếm thông tin trên internet.',
         },
+        tavily_extract: {
+          name: 'Trích xuất Nội dung Web',
+          description:
+            'Trích xuất nội dung đầy đủ từ các URL cụ thể. Yêu cầu TAVILY_API_KEY.',
+        },
+        tavily_crawl: {
+          name: 'Thu thập dữ liệu Web',
+          description:
+            'Thu thập dữ liệu trang web và trích xuất nội dung từ nhiều trang. Yêu cầu TAVILY_API_KEY.',
+        },
         knowledge_base_tool: {
           name: 'Truy xuất Kiến thức',
           description: 'Truy xuất thông tin từ kiến thức.',

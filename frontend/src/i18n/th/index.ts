@@ -115,6 +115,16 @@ const translation = {
           name: 'การค้นหาอินเทอร์เน็ต',
           description: 'ค้นหาข้อมูลจากอินเทอร์เน็ต',
         },
+        tavily_extract: {
+          name: 'ดึงเนื้อหาเว็บ',
+          description:
+            'ดึงเนื้อหาทั้งหมดจาก URL ที่ระบุ ต้องใช้ TAVILY_API_KEY',
+        },
+        tavily_crawl: {
+          name: 'สำรวจเว็บไซต์',
+          description:
+            'สำรวจเว็บไซต์และดึงเนื้อหาจากหลายหน้า ต้องใช้ TAVILY_API_KEY',
+        },
         knowledge_base_tool: {
           name: 'ดึงข้อมูลความรู้',
           description: 'ดึงข้อมูลจากความรู้',
