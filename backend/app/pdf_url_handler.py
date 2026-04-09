@@ -1,5 +1,6 @@
 """Utility to detect PDF URLs in user messages/search results and download them as attachments."""
 
+import io
 import logging
 import os
 import re
@@ -16,6 +17,12 @@ MAX_PDF_SIZE_BYTES = int(os.environ.get("MAX_PDF_URL_SIZE_BYTES", 4_500_000))
 
 # Timeout for downloading PDFs (seconds)
 PDF_DOWNLOAD_TIMEOUT = int(os.environ.get("PDF_DOWNLOAD_TIMEOUT", 30))
+
+# Maximum number of PDFs to download per search
+MAX_PDF_DOWNLOADS = int(os.environ.get("MAX_PDF_DOWNLOADS", 5))
+
+# Maximum characters of extracted text to keep per PDF (~3,000 tokens)
+MAX_PDF_TEXT_CHARS = int(os.environ.get("MAX_PDF_TEXT_CHARS", 12_000))
 
 # Regex to find URLs ending in .pdf (case-insensitive), handling optional query params
 PDF_URL_PATTERN = re.compile(
@@ -93,6 +100,36 @@ def download_pdf(url: str) -> tuple[str, bytes] | None:
         return None
 
 
+def extract_text_from_pdf(content: bytes, max_chars: int = 0) -> str:
+    """Extract text from PDF bytes using pypdf.
+
+    Returns extracted text truncated to max_chars (0 = use MAX_PDF_TEXT_CHARS).
+    """
+    if max_chars <= 0:
+        max_chars = MAX_PDF_TEXT_CHARS
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(content))
+        texts: list[str] = []
+        total = 0
+        for i, page in enumerate(reader.pages):
+            page_text = page.extract_text() or ""
+            if not page_text.strip():
+                continue
+            texts.append(page_text)
+            total += len(page_text)
+            if total >= max_chars:
+                break
+        extracted = "\n\n".join(texts)
+        if len(extracted) > max_chars:
+            extracted = extracted[:max_chars] + "..."
+        return extracted
+    except Exception as e:
+        logger.warning(f"Failed to extract text from PDF: {e}")
+        return ""
+
+
 def is_pdf_url(url: str) -> bool:
     """Check if a URL points to a PDF file."""
     if not url:
@@ -102,20 +139,39 @@ def is_pdf_url(url: str) -> bool:
     return path.endswith(".pdf")
 
 
-def download_pdfs_from_urls(urls: list[str]) -> list[tuple[str, bytes, str]]:
-    """Download PDFs from a list of URLs. Only attempts URLs that look like PDFs.
+def download_and_extract_pdf_texts(urls: list[str]) -> list[tuple[str, str, str]]:
+    """Download PDFs from URLs and extract their text content.
 
-    Returns a list of (filename, content_bytes, source_url) tuples for successful downloads.
+    Text extraction avoids Bedrock's 100-page PDF document limit entirely
+    by passing content as text blocks instead of document blocks.
+
+    Returns a list of (filename, extracted_text, source_url) tuples.
     """
-    results: list[tuple[str, bytes, str]] = []
+    results: list[tuple[str, str, str]] = []
 
     for url in urls:
         if not is_pdf_url(url):
             continue
 
+        if len(results) >= MAX_PDF_DOWNLOADS:
+            logger.info(
+                f"Reached max PDF download limit ({MAX_PDF_DOWNLOADS}). Skipping remaining URLs."
+            )
+            break
+
         pdf_result = download_pdf(url)
-        if pdf_result is not None:
-            filename, content = pdf_result
-            results.append((filename, content, url))
+        if pdf_result is None:
+            continue
+
+        filename, content = pdf_result
+        text = extract_text_from_pdf(content)
+        if not text.strip():
+            logger.warning(f"No text extracted from PDF {filename}, skipping.")
+            continue
+
+        results.append((filename, text, url))
+        logger.info(
+            f"Extracted {len(text)} chars from PDF {filename}"
+        )
 
     return results
