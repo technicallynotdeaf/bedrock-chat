@@ -33,16 +33,25 @@ const AuthCustom: React.FC<Props> = ({ children }) => {
       });
   }, []);
 
-  const handleSignIn = () => {
-    signInWithRedirect({
-      provider: {
-        custom: import.meta.env.VITE_APP_CUSTOM_PROVIDER_NAME,
-      },
-    });
+  const handleSignIn = async () => {
+    try {
+      await signInWithRedirect({
+        provider: {
+          custom: import.meta.env.VITE_APP_CUSTOM_PROVIDER_NAME,
+        },
+      });
+    } catch (e) {
+      console.error('Sign-in failed:', e);
+    }
   };
 
-  const handleSignOut = () => {
-    signOut();
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+      setAuthenticated(false);
+    } catch (e) {
+      console.error('Sign-out failed:', e);
+    }
   };
 
   return (

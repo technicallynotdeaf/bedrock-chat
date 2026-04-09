@@ -19,34 +19,39 @@ const socialProviderFromEnv = import.meta.env.VITE_APP_SOCIAL_PROVIDERS?.split(
   ','
 ).filter(validateSocialProvider);
 
+// Configure Amplify once at module scope (not inside a component).
+// Calling Amplify.configure() on every render can reset the Authenticator's
+// internal auth state machine, breaking sign-in and sign-out flows.
+Amplify.configure({
+  Auth: {
+    Cognito: {
+      userPoolId: import.meta.env.VITE_APP_USER_POOL_ID,
+      userPoolClientId: import.meta.env.VITE_APP_USER_POOL_CLIENT_ID,
+      loginWith: {
+        oauth: {
+          domain: import.meta.env.VITE_APP_COGNITO_DOMAIN,
+          scopes: ['openid', 'email'],
+          redirectSignIn: [import.meta.env.VITE_APP_REDIRECT_SIGNIN_URL],
+          redirectSignOut: [import.meta.env.VITE_APP_REDIRECT_SIGNOUT_URL],
+          responseType: 'code',
+        },
+      },
+    },
+  },
+});
+
+I18n.putVocabularies(translations);
+
 const App: React.FC = () => {
   const { t, i18n } = useTranslation();
 
   useEffect(() => {
-    // set header title
-    document.title = t('app.name')
+    document.title = t('app.name');
   }, [t]);
 
-  Amplify.configure({
-    Auth: {
-      Cognito: {
-        userPoolId: import.meta.env.VITE_APP_USER_POOL_ID,
-        userPoolClientId: import.meta.env.VITE_APP_USER_POOL_CLIENT_ID,
-        loginWith: {
-          oauth: {
-            domain: import.meta.env.VITE_APP_COGNITO_DOMAIN,
-            scopes: ['openid', 'email'],
-            redirectSignIn: [import.meta.env.VITE_APP_REDIRECT_SIGNIN_URL],
-            redirectSignOut: [import.meta.env.VITE_APP_REDIRECT_SIGNOUT_URL],
-            responseType: 'code',
-          },
-        },
-      },
-    },
-  });
-
-  I18n.putVocabularies(translations);
-  I18n.setLanguage(i18n.language);
+  useEffect(() => {
+    I18n.setLanguage(i18n.language);
+  }, [i18n.language]);
 
   return (
     <ErrorBoundary fallback={<ErrorFallback />}>
