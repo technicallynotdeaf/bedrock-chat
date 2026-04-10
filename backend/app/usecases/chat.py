@@ -274,7 +274,7 @@ def trace_to_root(
         if current_node.thinking_log:
             logs = [
                 log
-                for log in reversed(current_node.thinking_log)
+                for log in current_node.thinking_log
                 if any(
                     isinstance(content, ToolUseContentModel)
                     or isinstance(content, ToolResultContentModel)
@@ -296,9 +296,9 @@ def trace_to_root(
     # Older tool use/results are not needed — the model already produced responses
     # based on them.
     for i, (node, logs) in enumerate(zip(all_nodes, thinking_logs)):
-        result.append(node)
         if i >= len(all_nodes) - 4:
             result.extend(logs)
+        result.append(node)
 
     # Apply sliding window: keep only the most recent turns
     if len(result) > 0:
