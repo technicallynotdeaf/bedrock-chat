@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -5,17 +7,18 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from queue import Empty, SimpleQueue
 from threading import Thread
-from typing import BinaryIO, Literal, TypedDict
+from typing import TYPE_CHECKING, BinaryIO, Literal, TypedDict
 
 import boto3
 from botocore.exceptions import ClientError
-from app.agents.tools.agent_tool import ToolRunResult
 from app.auth import verify_token
-from app.repositories.conversation import RecordNotFoundError
-from app.routes.schemas.conversation import ChatInput
-from app.stream import OnStopInput, OnThinking
-from app.usecases.chat import chat
 from app.user import User
+
+if TYPE_CHECKING:
+    from app.agents.tools.agent_tool import ToolRunResult
+    from app.repositories.conversation import RecordNotFoundError
+    from app.routes.schemas.conversation import ChatInput
+    from app.stream import OnStopInput, OnThinking
 
 LARGE_PAYLOAD_SUPPORT_BUCKET = os.environ["LARGE_PAYLOAD_SUPPORT_BUCKET"]
 
@@ -241,6 +244,11 @@ def process_chat_input(
     notificator: NotificationSender,
 ) -> dict:
     """Process chat input and send the message to the client."""
+    # Deferred imports — these pull in bedrock, agents, vector_search, etc.
+    # and are only needed when actually processing a chat message (END step).
+    from app.repositories.conversation import RecordNotFoundError
+    from app.usecases.chat import chat
+
     logger.info(
         f"Processing chat input for conversation: {chat_input.conversation_id}, "
         f"model: {chat_input.message.model}"
@@ -449,6 +457,8 @@ def handler(event, context):
                     chunks = list(executor.map(_read_chunk, chunk_objects))
 
                 full_message = "".join(chunks)
+
+            from app.routes.schemas.conversation import ChatInput
 
             chat_input = ChatInput(**json.loads(full_message))
 

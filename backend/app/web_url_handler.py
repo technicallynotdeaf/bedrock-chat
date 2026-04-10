@@ -200,10 +200,15 @@ def fetch_url_content(url: str) -> tuple[str, str] | None:
 
 
 def fetch_urls_content(urls: list[str]) -> list[tuple[str, str]]:
-    """Fetch content from multiple URLs. Returns list of (url, content) tuples."""
-    results: list[tuple[str, str]] = []
-    for url in urls:
-        result = fetch_url_content(url)
-        if result:
-            results.append(result)
-    return results
+    """Fetch content from multiple URLs in parallel. Returns list of (url, content) tuples."""
+    if not urls:
+        return []
+    if len(urls) == 1:
+        result = fetch_url_content(urls[0])
+        return [result] if result else []
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=min(len(urls), MAX_URLS_PER_MESSAGE)) as executor:
+        raw = list(executor.map(fetch_url_content, urls))
+    return [r for r in raw if r is not None]

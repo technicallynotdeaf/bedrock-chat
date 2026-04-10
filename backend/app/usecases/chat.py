@@ -76,8 +76,6 @@ def process_pdf_urls_in_message(message: MessageModel) -> list[str]:
 
     Returns a list of successfully processed PDF URLs for logging/display purposes.
     """
-    processed_urls: list[str] = []
-
     # Collect all PDF URLs from text content
     pdf_urls: list[str] = []
     for content in message.content:
@@ -86,12 +84,18 @@ def process_pdf_urls_in_message(message: MessageModel) -> list[str]:
             pdf_urls.extend(urls)
 
     if not pdf_urls:
-        return processed_urls
+        return []
 
     logger.info(f"Found {len(pdf_urls)} PDF URL(s) in message: {pdf_urls}")
 
-    for url in pdf_urls:
-        result = download_pdf(url)
+    # Download PDFs in parallel
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=min(len(pdf_urls), 5)) as executor:
+        downloads = list(executor.map(download_pdf, pdf_urls))
+
+    processed_urls: list[str] = []
+    for url, result in zip(pdf_urls, downloads):
         if result is None:
             logger.warning(f"Skipping PDF URL (download failed): {url}")
             continue
@@ -476,18 +480,27 @@ def chat(
 
     message_map = conversation.message_map
 
-    # Process PDF URLs in the user message: detect, download, and attach as documents
+    # Process PDF URLs and web URLs concurrently — they are independent I/O
     web_url_context: list[tuple[str, str]] = []
     if not chat_input.continue_generate:
         user_message = message_map.get(user_msg_id)
         if user_message:
-            processed_pdf_urls = process_pdf_urls_in_message(user_message)
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=2) as url_executor:
+                pdf_future = url_executor.submit(
+                    process_pdf_urls_in_message, user_message
+                )
+                web_future = url_executor.submit(
+                    process_web_urls_in_message, user_message
+                )
+
+            processed_pdf_urls = pdf_future.result()
             if processed_pdf_urls:
                 logger.info(
                     f"Processed {len(processed_pdf_urls)} PDF URL(s) from user message"
                 )
-            # Extract and fetch web page content from URLs in the message
-            web_url_context = process_web_urls_in_message(user_message)
+            web_url_context = web_future.result()
             if web_url_context:
                 logger.info(
                     f"Extracted content from {len(web_url_context)} web URL(s)"
