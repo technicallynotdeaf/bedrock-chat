@@ -1,20 +1,24 @@
+from __future__ import annotations
+
 import json
 import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
-from queue import SimpleQueue
+from queue import Empty, SimpleQueue
 from threading import Thread
-from typing import BinaryIO, Literal, TypedDict
+from typing import TYPE_CHECKING, BinaryIO, Literal, TypedDict
 
 import boto3
 from botocore.exceptions import ClientError
-from app.agents.tools.agent_tool import ToolRunResult
 from app.auth import verify_token
-from app.repositories.conversation import RecordNotFoundError
-from app.routes.schemas.conversation import ChatInput
-from app.stream import OnStopInput, OnThinking
-from app.usecases.chat import chat
 from app.user import User
+
+if TYPE_CHECKING:
+    from app.agents.tools.agent_tool import ToolRunResult
+    from app.repositories.conversation import RecordNotFoundError
+    from app.routes.schemas.conversation import ChatInput
+    from app.stream import OnStopInput, OnThinking
 
 LARGE_PAYLOAD_SUPPORT_BUCKET = os.environ["LARGE_PAYLOAD_SUPPORT_BUCKET"]
 
@@ -42,11 +46,21 @@ class _NotifyCommand(TypedDict):
     payload: bytes | BinaryIO
 
 
+class _StreamTokenCommand(TypedDict):
+    type: Literal["stream_token"]
+    token: str
+    status: str  # "STREAMING" or "REASONING"
+
+
 class _FinishCommand(TypedDict):
     type: Literal["finish"]
 
 
-_Command = _NotifyCommand | _FinishCommand
+_Command = _NotifyCommand | _StreamTokenCommand | _FinishCommand
+
+
+_STREAM_BATCH_INTERVAL = 0.05  # 50 ms
+_STREAM_BATCH_MAX_TOKENS = 5
 
 
 class NotificationSender:
@@ -54,6 +68,36 @@ class NotificationSender:
         self.commands = SimpleQueue[_Command]()
         self.endpoint_url = endpoint_url
         self.connection_id = connection_id
+
+    def _send(self, gatewayapi, payload: bytes | BinaryIO) -> bool:
+        """Send a single payload. Returns False if the connection is gone."""
+        try:
+            gatewayapi.post_to_connection(
+                ConnectionId=self.connection_id,
+                Data=payload,
+            )
+            return True
+        except (
+            gatewayapi.exceptions.GoneException,
+            gatewayapi.exceptions.ForbiddenException,
+        ) as e:
+            logger.exception(
+                f"Shutdown the notification sender due to an exception: {e}"
+            )
+            return False
+        except Exception as e:
+            logger.exception(f"Failed to send notification: {e}")
+            return True
+
+    def _flush_token_buffer(self, gatewayapi, buf: list[str], status: str) -> bool:
+        """Flush accumulated streaming tokens as a single message."""
+        if not buf:
+            return True
+        payload = json.dumps(
+            dict(status=status, completion="".join(buf))
+        ).encode("utf-8")
+        buf.clear()
+        return self._send(gatewayapi, payload)
 
     def run(self):
         import boto3
@@ -63,34 +107,51 @@ class NotificationSender:
             endpoint_url=self.endpoint_url,
         )
 
+        token_buf: list[str] = []
+        buf_status: str = "STREAMING"
+        last_flush = time.monotonic()
+
         while True:
-            command = self.commands.get()
-            if command["type"] == "notify":
-                try:
-                    logger.debug(
-                        f"[WEBSOCKET_SEND] Sending to connection {self.connection_id}: {command['payload'][:200]}..."
-                    )
-                    gatewayapi.post_to_connection(
-                        ConnectionId=self.connection_id,
-                        Data=command["payload"],
-                    )
-                    logger.debug(
-                        f"[WEBSOCKET_SEND] Successfully sent to connection {self.connection_id}"
-                    )
-
-                except (
-                    gatewayapi.exceptions.GoneException,
-                    gatewayapi.exceptions.ForbiddenException,
-                ) as e:
-                    logger.exception(
-                        f"Shutdown the notification sender due to an exception: {e}"
-                    )
+            # If we have buffered tokens, use a short timeout so we flush
+            # promptly; otherwise block until a command arrives.
+            timeout = _STREAM_BATCH_INTERVAL if token_buf else None
+            try:
+                command = self.commands.get(timeout=timeout)
+            except Empty:
+                # Timeout — flush whatever we have and loop
+                if not self._flush_token_buffer(gatewayapi, token_buf, buf_status):
                     break
+                last_flush = time.monotonic()
+                continue
 
-                except Exception as e:
-                    logger.exception(f"Failed to send notification: {e}")
+            if command["type"] == "finish":
+                self._flush_token_buffer(gatewayapi, token_buf, buf_status)
+                break
 
-            elif command["type"] == "finish":
+            if command["type"] == "stream_token":
+                # If the status changed (e.g. STREAMING → REASONING), flush first
+                if token_buf and command["status"] != buf_status:
+                    if not self._flush_token_buffer(gatewayapi, token_buf, buf_status):
+                        break
+                    last_flush = time.monotonic()
+                buf_status = command["status"]
+                token_buf.append(command["token"])
+                now = time.monotonic()
+                if (
+                    len(token_buf) >= _STREAM_BATCH_MAX_TOKENS
+                    or (now - last_flush) >= _STREAM_BATCH_INTERVAL
+                ):
+                    if not self._flush_token_buffer(gatewayapi, token_buf, buf_status):
+                        break
+                    last_flush = now
+                continue
+
+            # Regular (non-streaming) notification — flush tokens first
+            if not self._flush_token_buffer(gatewayapi, token_buf, buf_status):
+                break
+            last_flush = time.monotonic()
+
+            if not self._send(gatewayapi, command["payload"]):
                 break
 
     def finish(self):
@@ -109,14 +170,7 @@ class NotificationSender:
         )
 
     def on_stream(self, token: str):
-        payload = json.dumps(
-            dict(
-                status="STREAMING",
-                completion=token,
-            )
-        ).encode("utf-8")
-
-        self.notify(payload=payload)
+        self.commands.put({"type": "stream_token", "token": token, "status": "STREAMING"})
 
     def on_stop(self, arg: OnStopInput):
         logger.debug(f"[WEBSOCKET_ON_STOP] WebSocket on_stop called with: {arg}")
@@ -181,13 +235,7 @@ class NotificationSender:
             )
 
     def on_reasoning(self, token: str):
-        payload = json.dumps(
-            dict(
-                status="REASONING",
-                completion=token,
-            )
-        ).encode("utf-8")
-        self.notify(payload=payload)
+        self.commands.put({"type": "stream_token", "token": token, "status": "REASONING"})
 
 
 def process_chat_input(
@@ -196,6 +244,11 @@ def process_chat_input(
     notificator: NotificationSender,
 ) -> dict:
     """Process chat input and send the message to the client."""
+    # Deferred imports — these pull in bedrock, agents, vector_search, etc.
+    # and are only needed when actually processing a chat message (END step).
+    from app.repositories.conversation import RecordNotFoundError
+    from app.usecases.chat import chat
+
     logger.info(
         f"Processing chat input for conversation: {chat_input.conversation_id}, "
         f"model: {chat_input.message.model}"
@@ -337,14 +390,6 @@ def handler(event, context):
             decoded = verify_token(token)
             user = User.from_decoded_token(decoded)
 
-            # Read session metadata
-            session_obj = s3_client.get_object(
-                Bucket=LARGE_PAYLOAD_SUPPORT_BUCKET,
-                Key=_session_key(connection_id),
-            )
-            session_data = json.loads(session_obj["Body"].read())
-            user_id = session_data["user_id"]  # noqa: F841 – kept for audit / future use
-
             # Try reading the direct S3 upload (new protocol) first.
             # Falls back to chunk assembly if the payload key doesn't exist.
             payload_key = f"{_chunk_prefix(connection_id)}payload"
@@ -413,16 +458,27 @@ def handler(event, context):
 
                 full_message = "".join(chunks)
 
+            from app.routes.schemas.conversation import ChatInput
+
             chat_input = ChatInput(**json.loads(full_message))
 
-            # Clean up S3 objects after successful parsing
-            _cleanup_s3_chunks(connection_id)
-
-            return process_chat_input(
+            # Process chat first, clean up S3 afterwards so the user gets
+            # their first token as soon as possible.
+            result = process_chat_input(
                 user=user,
                 chat_input=chat_input,
                 notificator=notificator,
             )
+
+            # Best-effort cleanup in a background thread — the 1-day lifecycle
+            # rule on the ws-chunks/ prefix handles anything we miss.
+            Thread(
+                target=_cleanup_s3_chunks,
+                args=(connection_id,),
+                daemon=True,
+            ).start()
+
+            return result
 
         else:
             # BODY step — store this chunk as an S3 object

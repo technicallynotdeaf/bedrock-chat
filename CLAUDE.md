@@ -156,3 +156,54 @@ Backend: ChatInput → Base64EncodedBytes (auto-decodes to bytes) → Attachment
 Chunker: If >2.5MB → extract text → truncate to 320K chars → TextContentModel blocks
 Bedrock: Either raw document bytes (native) or extracted text chunks
 ```
+
+---
+
+## Latency Optimizations Applied (branch: `claude/optimize-bot-latency-h4i4q`)
+
+### Tier 1 — Backend request-path optimizations
+
+1. **Cached boto3 Bedrock clients** (`backend/app/utils.py`)
+   - All `get_bedrock_*_client()` functions now return cached clients keyed by `(service, region)`
+   - Configured with `adaptive` retry mode and `max_pool_connections=10`
+   - Saves ~50-150ms per Bedrock call on warm Lambda invocations
+
+2. **Batched WebSocket token streaming** (`backend/app/websocket.py`)
+   - `NotificationSender` now buffers streaming tokens and flushes every 50ms or 5 tokens
+   - Reduces `post_to_connection` API calls from ~500 to ~100 per typical response
+   - Applies to both STREAMING and REASONING tokens; flushes on status change
+   - New command type `stream_token` alongside existing `notify` and `finish`
+
+3. **Removed redundant S3 session read on END step** (`backend/app/websocket.py`)
+   - The END handler was reading session.json from S3 just for `user_id`, but the JWT token already provides it via `verify_token` → `User.from_decoded_token`
+
+4. **Deferred S3 chunk cleanup** (`backend/app/websocket.py`)
+   - `_cleanup_s3_chunks()` now runs in a background daemon thread *after* `process_chat_input` returns
+   - The 1-day lifecycle rule on `ws-chunks/` prefix handles anything missed
+
+5. **Reduced Bedrock throttle retry delay** (`backend/app/stream.py`, `backend/app/bedrock.py`)
+   - Changed `@retry` delay from 60s to 2s (with backoff=2, jitter=(0,2))
+   - Previous 60s delay was catastrophic for user experience on throttling
+
+### Tier 2 — I/O parallelization and import deferral
+
+6. **Parallel web URL fetches** (`backend/app/web_url_handler.py`)
+   - `fetch_urls_content()` now uses `ThreadPoolExecutor` to fetch up to 5 URLs concurrently
+   - Previously sequential: 5 URLs × 15s timeout = up to 75s → now ~15s max
+
+7. **Parallel PDF URL downloads** (`backend/app/usecases/chat.py`)
+   - `process_pdf_urls_in_message()` now downloads PDFs in parallel with `ThreadPoolExecutor`
+
+8. **Concurrent PDF + web URL processing** (`backend/app/usecases/chat.py`)
+   - `process_pdf_urls_in_message` and `process_web_urls_in_message` now run concurrently in the `chat()` function using a 2-worker ThreadPoolExecutor
+
+9. **Lazy imports in WebSocket handler** (`backend/app/websocket.py`)
+   - Heavy imports (`app.usecases.chat`, `app.stream`, `app.agents`, `app.repositories.conversation`, `app.routes.schemas.conversation`) are deferred to the END step
+   - Module-level imports reduced to: `json`, `logging`, `os`, `time`, `boto3`, `app.auth`, `app.user`
+   - Type hints preserved via `TYPE_CHECKING` + `from __future__ import annotations`
+   - Reduces cold start time for START and BODY steps
+
+### Critical: Do NOT change these values
+- `_STREAM_BATCH_INTERVAL = 0.05` (50ms) — lower causes excessive API calls, higher causes visible lag
+- `_STREAM_BATCH_MAX_TOKENS = 5` — balanced between batching efficiency and streaming feel
+- Throttle retry `delay=2` — must be short for UX but non-zero to avoid hammering Bedrock

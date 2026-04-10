@@ -40,24 +40,41 @@ def is_running_on_lambda():
     return "AWS_EXECUTION_ENV" in os.environ
 
 
+# Cached boto3 clients keyed by (service, region).  Reused across warm
+# Lambda invocations to avoid repeated service-model loading & endpoint
+# resolution (~50-150 ms per client creation).
+_boto3_client_cache: dict[tuple[str, str], object] = {}
+
+_BEDROCK_CONFIG = Config(
+    retries={"max_attempts": 3, "mode": "adaptive"},
+    max_pool_connections=10,
+)
+
+
+def _get_cached_client(service: str, region: str, config: Config | None = None):
+    key = (service, region)
+    if key not in _boto3_client_cache:
+        kwargs: dict = {"region_name": region}
+        if config is not None:
+            kwargs["config"] = config
+        _boto3_client_cache[key] = boto3.client(service, **kwargs)
+    return _boto3_client_cache[key]
+
+
 def get_bedrock_client(region=BEDROCK_REGION):
-    client = boto3.client("bedrock", region_name=region)
-    return client
+    return _get_cached_client("bedrock", region, _BEDROCK_CONFIG)
 
 
 def get_bedrock_runtime_client(region=BEDROCK_REGION):
-    client = boto3.client("bedrock-runtime", region_name=region)
-    return client
+    return _get_cached_client("bedrock-runtime", region, _BEDROCK_CONFIG)
 
 
 def get_bedrock_agent_client(region=BEDROCK_REGION):
-    client = boto3.client("bedrock-agent", region_name=region)
-    return client
+    return _get_cached_client("bedrock-agent", region, _BEDROCK_CONFIG)
 
 
 def get_bedrock_agent_runtime_client(region=BEDROCK_REGION):
-    client = boto3.client("bedrock-agent-runtime", region_name=region)
-    return client
+    return _get_cached_client("bedrock-agent-runtime", region, _BEDROCK_CONFIG)
 
 
 def get_aest_now() -> datetime:
