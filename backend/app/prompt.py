@@ -35,7 +35,9 @@ Example: first answer [^3]. second answer [^1][^2].
 
 
 def get_prompt_to_cite_tool_results(model: type_model_name) -> str:
-    inserted_prompt = """Answer the user's question using only tool results. If tools don't provide the answer, say so. Verify user assertions against tool results.
+    inserted_prompt = """Answer the user's question using the tool results you have gathered. If tools don't provide the answer, say so. Verify user assertions against tool results.
+
+IMPORTANT: After using tools, you MUST always provide a substantive response that describes what you found. Never say you have "completed your analysis" or "finished researching" without actually reporting the specific findings, key points, and details from the tool results. If some tools failed but others succeeded, report the findings from the successful tools and briefly note which sources were unavailable.
 
 Cite sources inline using [^source_id] format. Do NOT list sources at the end.
 Example: first answer [^ccc]. second answer [^aaa][^bbb].
