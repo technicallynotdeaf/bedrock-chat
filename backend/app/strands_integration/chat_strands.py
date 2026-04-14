@@ -37,12 +37,23 @@ logger = logging.getLogger(__name__)
 
 
 _FALLBACK_SUMMARY_INSTRUCTION = (
-    "You were unable to produce a final text response in the previous turn "
-    "(for example because you reached a tool-call limit or stopped without "
-    "answering). Using the tool results already gathered above, please now "
-    "provide your final answer to the user's original question. Summarize "
-    "the key findings clearly and briefly note any sources that were "
-    "unavailable. Do not call any more tools."
+    "You've reached the tool-call limit without producing a final answer. "
+    "Stop calling tools now — they are no longer available.\n\n"
+    "Carefully review EVERY tool result in the conversation history above: "
+    "search results, fetched pages, extracted content, crawled pages, and any "
+    "other data gathered. Consider both successful results and any that "
+    "failed or returned errors.\n\n"
+    "Then provide a substantive final response to the user's original "
+    "question that:\n"
+    "1. Synthesises the key findings across all tool results.\n"
+    "2. Reports specific details, facts, and quotes from the gathered "
+    "content (not just that 'analysis was done').\n"
+    "3. Cites sources inline using the [^source_id] format when citations "
+    "are enabled.\n"
+    "4. Briefly notes which sources (if any) were unavailable or failed, "
+    "so the user understands any gaps.\n\n"
+    "Do not apologise for the tool limit — just answer the question using "
+    "what was gathered."
 )
 
 
@@ -212,16 +223,31 @@ def converse_with_strands(
 
     stop_reason, result_message, metrics = run_agent(agent)
 
-    # Safety net: if the event loop stopped without the model producing a
-    # final text response (e.g. MaxTurnsHook triggered after the model kept
-    # requesting tools, or the model returned only tool_use blocks), make
-    # a follow-up call without tools so the user always sees an answer.
+    # Safety net: if the event loop finished without a final text response
+    # from the model, make a tool-free follow-up call so the user always
+    # sees an answer. This covers:
+    #   1. MaxTurnsHook triggered — the model was still calling tools when
+    #      we hit the 10-call budget, so Strands returned the last tool_use
+    #      message (no text).
+    #   2. The model stopped for any other reason without producing text.
+    #
+    # If the model already produced text alongside tool_use blocks, we keep
+    # that response as-is to avoid duplicating work.
     if not _has_text_content(result_message):
-        logger.warning(
-            f"Event loop stopped with no text response (stop_reason={stop_reason}, "
-            f"content blocks={len(result_message.get('content', []))}). "
-            "Making follow-up call without tools to produce a final response."
-        )
+        if max_turns_hook.limit_reached:
+            logger.warning(
+                f"Tool-call limit hit ({max_turns_hook.tool_call_count}) "
+                "and no text response was produced. Running tool-free "
+                "follow-up so the agent interrogates every tool result "
+                "and responds to the user."
+            )
+        else:
+            logger.warning(
+                f"Event loop stopped with no text response "
+                f"(stop_reason={stop_reason}). "
+                "Running tool-free follow-up to produce a final response."
+            )
+
         try:
             fallback_message, fallback_metrics = _run_fallback_response(
                 agent=agent,
@@ -235,10 +261,20 @@ def converse_with_strands(
                 stop_reason = "end_turn"
                 # Merge metrics so token counts / price reflect both calls
                 metrics = _merge_metrics(metrics, fallback_metrics)
+                logger.info(
+                    "Fallback call produced a text response. "
+                    f"Added tokens — input: {fallback_metrics.accumulated_usage.get('inputTokens', 0)}, "
+                    f"output: {fallback_metrics.accumulated_usage.get('outputTokens', 0)}."
+                )
+            else:
+                logger.warning(
+                    "Fallback call still returned no text. Keeping original "
+                    "result message."
+                )
         except Exception as e:
             logger.error(
                 f"Fallback response call failed: {e}. "
-                "Returning original (empty) result message.",
+                "Returning original result message.",
                 exc_info=True,
             )
 
