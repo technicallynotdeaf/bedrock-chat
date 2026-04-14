@@ -36,6 +36,78 @@ from strands.types.exceptions import MaxTokensReachedException
 logger = logging.getLogger(__name__)
 
 
+_FALLBACK_SUMMARY_INSTRUCTION = (
+    "You were unable to produce a final text response in the previous turn "
+    "(for example because you reached a tool-call limit or stopped without "
+    "answering). Using the tool results already gathered above, please now "
+    "provide your final answer to the user's original question. Summarize "
+    "the key findings clearly and briefly note any sources that were "
+    "unavailable. Do not call any more tools."
+)
+
+
+def _has_text_content(message: Message) -> bool:
+    """Return True if the message has at least one non-empty text block."""
+    for content in message.get("content", []):
+        if "text" in content:
+            text = content.get("text") or ""
+            if text.strip():
+                return True
+    return False
+
+
+def _merge_metrics(
+    primary: EventLoopMetrics, secondary: EventLoopMetrics
+) -> EventLoopMetrics:
+    """Merge accumulated usage/metrics from a fallback call into the primary."""
+    try:
+        for key, value in secondary.accumulated_usage.items():
+            primary.accumulated_usage[key] = (
+                primary.accumulated_usage.get(key, 0) + value
+            )
+    except Exception as e:
+        logger.warning(f"Could not merge fallback metrics: {e}")
+    return primary
+
+
+def _run_fallback_response(
+    agent: Agent,
+    on_stream: Callable[[str], None] | None,
+    on_reasoning: Callable[[str], None] | None,
+    on_message: Callable[[Message], None] | None,
+) -> tuple[Message, EventLoopMetrics]:
+    """
+    Make a follow-up model call WITHOUT tools to force a final text response.
+
+    This is used as a safety net when the main event loop stops without the
+    model producing any text (e.g. MaxTurnsHook cut it off while it was still
+    calling tools). We reuse the existing conversation history — including all
+    tool results — so the model has full context to write a summary.
+    """
+    # Build a minimal agent with NO tools so the model must produce text.
+    fallback_agent = Agent(
+        model=agent.model,
+        tools=[],
+        hooks=[],
+        system_prompt=agent.system_prompt,
+        messages=list(agent.messages),
+    )
+    # Reuse the streaming callback handler so tokens reach the user in real time.
+    fallback_agent.callback_handler = create_callback_handler(
+        on_stream=on_stream,
+        on_reasoning=on_reasoning,
+        on_message=on_message,
+    )
+
+    # Append a user instruction telling the model to produce the final response.
+    follow_up: Message = {
+        "role": "user",
+        "content": [{"text": _FALLBACK_SUMMARY_INSTRUCTION}],
+    }
+    result = fallback_agent([follow_up])
+    return result.message, result.metrics
+
+
 def converse_with_strands(
     bot: BotModel | None,
     chat_input: ChatInput,
@@ -139,6 +211,36 @@ def converse_with_strands(
             )
 
     stop_reason, result_message, metrics = run_agent(agent)
+
+    # Safety net: if the event loop stopped without the model producing a
+    # final text response (e.g. MaxTurnsHook triggered after the model kept
+    # requesting tools, or the model returned only tool_use blocks), make
+    # a follow-up call without tools so the user always sees an answer.
+    if not _has_text_content(result_message):
+        logger.warning(
+            f"Event loop stopped with no text response (stop_reason={stop_reason}, "
+            f"content blocks={len(result_message.get('content', []))}). "
+            "Making follow-up call without tools to produce a final response."
+        )
+        try:
+            fallback_message, fallback_metrics = _run_fallback_response(
+                agent=agent,
+                on_stream=on_stream,
+                on_reasoning=on_reasoning,
+                on_message=on_message,
+            )
+            if _has_text_content(fallback_message):
+                result_message = fallback_message
+                # Stop reason is now end_turn since the fallback produced text
+                stop_reason = "end_turn"
+                # Merge metrics so token counts / price reflect both calls
+                metrics = _merge_metrics(metrics, fallback_metrics)
+        except Exception as e:
+            logger.error(
+                f"Fallback response call failed: {e}. "
+                "Returning original (empty) result message.",
+                exc_info=True,
+            )
 
     # Convert Strands Message to MessageModel
     message = strands_message_to_message_model(
