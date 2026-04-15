@@ -30,6 +30,7 @@ def create_strands_agent(
     prompt_caching_enabled: bool = False,
     has_tools: bool = False,
     hooks: list[HookProvider] | None = None,
+    enable_internet_search: bool = False,
 ) -> Agent:
     model_config = get_bedrock_model_config(
         model_name=model_name,
@@ -51,7 +52,7 @@ def create_strands_agent(
 
     agent = Agent(
         model=model,
-        tools=get_strands_tools(bot, model_name),  # type: ignore
+        tools=get_strands_tools(bot, model_name, enable_internet_search),  # type: ignore
         hooks=hooks or [],
         system_prompt=system_prompt,
     )

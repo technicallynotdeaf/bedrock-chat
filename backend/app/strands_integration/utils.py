@@ -44,12 +44,20 @@ def get_strands_registered_tools(bot: BotModel | None = None) -> list[StrandsAge
 
 
 def get_strands_tools(
-    bot: BotModel | None, model_name: type_model_name
+    bot: BotModel | None,
+    model_name: type_model_name,
+    enable_internet_search: bool = False,
 ) -> list[StrandsAgentTool]:
     """
     Get Strands tools based on bot configuration.
 
     Similar to agents/utils.py get_tools() but optimized for Strands.
+
+    For normal chat (no bot), tools are not registered by default. However, when
+    the user has toggled internet search on, we expose the ``internet_search``
+    tool so the model can invoke it on any turn (first message or follow-up)
+    with a context-aware query rather than relying on a one-shot pre-hook that
+    uses the raw user text as the query.
     """
     if not is_tooluse_supported(model_name):
         logger.warning(
@@ -57,8 +65,21 @@ def get_strands_tools(
         )
         return []
 
-    # Return empty list if bot is None or agent is not enabled
-    if not bot or not bot.is_agent_enabled():
+    # Normal chat (no bot): expose only internet_search when the user has enabled it.
+    if bot is None:
+        if enable_internet_search:
+            from app.strands_integration.tools.internet_search import (
+                create_internet_search_tool,
+            )
+
+            logger.info(
+                "Normal chat with internet search enabled: exposing internet_search tool."
+            )
+            return [create_internet_search_tool(None)]
+        return []
+
+    # Return empty list if agent is not enabled
+    if not bot.is_agent_enabled():
         return []
 
     registered_tools = get_strands_registered_tools(bot)
