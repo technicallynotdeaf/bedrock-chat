@@ -37,23 +37,24 @@ logger = logging.getLogger(__name__)
 
 
 _FALLBACK_SUMMARY_INSTRUCTION = (
-    "You've reached the tool-call limit without producing a final answer. "
-    "Stop calling tools now — they are no longer available.\n\n"
-    "Carefully review EVERY tool result in the conversation history above: "
-    "search results, fetched pages, extracted content, crawled pages, and any "
-    "other data gathered. Consider both successful results and any that "
-    "failed or returned errors.\n\n"
-    "Then provide a substantive final response to the user's original "
-    "question that:\n"
-    "1. Synthesises the key findings across all tool results.\n"
-    "2. Reports specific details, facts, and quotes from the gathered "
-    "content (not just that 'analysis was done').\n"
-    "3. Cites sources inline using the [^source_id] format when citations "
-    "are enabled.\n"
-    "4. Briefly notes which sources (if any) were unavailable or failed, "
-    "so the user understands any gaps.\n\n"
-    "Do not apologise for the tool limit — just answer the question using "
-    "what was gathered."
+    "IMPORTANT — tool calls have been paused at the research limit. "
+    "No more tools are available in this turn.\n\n"
+    "Your task now:\n"
+    "1. Carefully read EVERY tool result in the conversation above "
+    "(search results, fetched pages, extracted content, crawled pages). "
+    "Consider both successful results AND any that failed or errored.\n"
+    "2. Using only that gathered content, write a clear, substantive "
+    "answer to the user's original question. Include specific facts, "
+    "details, and quotes from the results — do not just say that "
+    "research was done.\n"
+    "3. Cite sources inline with [^source_id] notation where available.\n"
+    "4. Briefly note any sources that were unavailable or returned errors, "
+    "so the user understands any gaps in the research.\n"
+    "5. At the end of your response, ask the user whether they would like "
+    "you to continue researching for more detail, or whether the current "
+    "answer is sufficient.\n\n"
+    "Do not apologise for the research limit — simply answer and offer to "
+    "dig deeper."
 )
 
 
@@ -90,32 +91,43 @@ def _run_fallback_response(
     """
     Make a follow-up model call WITHOUT tools to force a final text response.
 
-    This is used as a safety net when the main event loop stops without the
-    model producing any text (e.g. MaxTurnsHook cut it off while it was still
-    calling tools). We reuse the existing conversation history — including all
-    tool results — so the model has full context to write a summary.
+    Used when the main event loop stops without the model producing text
+    (e.g. MaxTurnsHook cut it off while it was still calling tools).
+
+    The key constraint: agent.messages ends with a role="user" tool_result
+    message, so we must NOT pass any new user message — two consecutive user
+    messages would be rejected by Bedrock. Instead, the summary instruction
+    is injected via the system prompt and the agent is called with no
+    additional input so it responds as the next assistant turn.
     """
+    # Combine the original system prompt with the fallback instruction so the
+    # model knows what to do without any extra user message.
+    base_system = agent.system_prompt or ""
+    combined_system = (
+        f"{base_system}\n\n{_FALLBACK_SUMMARY_INSTRUCTION}"
+        if base_system
+        else _FALLBACK_SUMMARY_INSTRUCTION
+    )
+
     # Build a minimal agent with NO tools so the model must produce text.
     fallback_agent = Agent(
         model=agent.model,
         tools=[],
         hooks=[],
-        system_prompt=agent.system_prompt,
+        system_prompt=combined_system,
         messages=list(agent.messages),
     )
-    # Reuse the streaming callback handler so tokens reach the user in real time.
+    # Reuse the streaming callback so tokens stream to the user in real time.
     fallback_agent.callback_handler = create_callback_handler(
         on_stream=on_stream,
         on_reasoning=on_reasoning,
         on_message=on_message,
     )
 
-    # Append a user instruction telling the model to produce the final response.
-    follow_up: Message = {
-        "role": "user",
-        "content": [{"text": _FALLBACK_SUMMARY_INSTRUCTION}],
-    }
-    result = fallback_agent([follow_up])
+    # Call with no new prompt — the existing history (ending with the
+    # tool_result user message) is used as-is; the model responds as
+    # the next assistant turn guided by the system prompt instruction.
+    result = fallback_agent()
     return result.message, result.metrics
 
 
