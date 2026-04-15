@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import timezone
 from typing import Callable
 
@@ -593,8 +594,34 @@ def chat(
                     )
                 )
 
-    # Internet search: when enabled, search the web and inject results as context
-    if chat_input.enable_internet_search and not chat_input.continue_generate:
+    # Internet search: when enabled, search the web and inject results as context.
+    #
+    # For normal chat (no bot) on the Strands path, skip this pre-hook — the
+    # model is given the ``internet_search`` tool directly so it can invoke
+    # searches on any turn with a properly scoped query. The old pre-hook used
+    # the raw user text as the query, which produced poor results for
+    # follow-up messages like "tell me more about the second one".
+    _strands_internet_search_active = (
+        bot is None
+        and chat_input.enable_internet_search
+        and os.environ.get("USE_STRANDS", "true").lower() == "true"
+        and is_tooluse_supported(chat_input.message.model)
+    )
+    if _strands_internet_search_active:
+        instructions.append(
+            "You have access to an `internet_search` tool for looking up current "
+            "information on the web. The user has enabled web search for this "
+            "conversation. Use the tool whenever a question would benefit from "
+            "up-to-date information or when you are unsure of a factual claim, "
+            "including on follow-up turns. Formulate a focused search query that "
+            "accounts for the conversation context rather than just the raw "
+            "latest message, and cite the sources you use."
+        )
+    if (
+        chat_input.enable_internet_search
+        and not chat_input.continue_generate
+        and not _strands_internet_search_active
+    ):
         user_content = conversation.message_map[user_msg_id].content
         # Use the last text content as the search query
         query_text = next(
@@ -710,8 +737,6 @@ def chat(
     Retries with progressively trimmed conversation history if the prompt exceeds the
     model's context window.
     """
-    import os
-
     use_strands = os.environ.get("USE_STRANDS", "true").lower() == "true"
     MAX_TRIM_RETRIES = 20
 

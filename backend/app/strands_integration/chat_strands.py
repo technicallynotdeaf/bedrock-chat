@@ -84,7 +84,11 @@ def converse_with_strands(
     max_turns_hook = MaxTurnsHook(max_tool_calls=10)
 
     prompt_caching_enabled = bot.prompt_caching_enabled if bot is not None else True
-    has_tools = bot is not None and bot.is_agent_enabled()
+    # Normal chat (no bot) exposes the internet_search tool when the user toggles it on,
+    # so the model can call it on any turn — not just the first message.
+    has_tools = (bot is not None and bot.is_agent_enabled()) or (
+        bot is None and chat_input.enable_internet_search
+    )
 
     agent = create_strands_agent(
         bot=bot,
@@ -96,6 +100,7 @@ def converse_with_strands(
         prompt_caching_enabled=prompt_caching_enabled,
         has_tools=has_tools,
         hooks=[tool_capture, max_turns_hook],
+        enable_internet_search=chat_input.enable_internet_search,
     )
 
     thinking_log: list[SimpleMessageModel] = []
