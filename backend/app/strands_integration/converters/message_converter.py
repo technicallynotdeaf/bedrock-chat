@@ -54,6 +54,71 @@ def _to_guardrails_grounding_source(
     )
 
 
+_ORPHAN_TOOLUSE_PLACEHOLDER = (
+    "(previous tool calls were interrupted — continuing from here)"
+)
+
+
+def _sanitize_orphan_tool_uses(messages: Messages) -> Messages:
+    """Drop `toolUse` blocks that have no matching `toolResult` in the next msg.
+
+    Older conversations may contain assistant messages whose `toolUse`
+    blocks were orphaned (e.g. by a previous `stop_event_loop` code path
+    that has since been removed). Bedrock Converse rejects those with:
+
+        "tool_use ids were found without tool_result blocks immediately after"
+
+    We run this sanitizer just before the request is sent so both legacy
+    corrupted history AND any fresh corruption are repaired on the fly.
+    """
+    sanitized: Messages = []
+    for i, msg in enumerate(messages):
+        if msg.get("role") != "assistant":
+            sanitized.append(msg)
+            continue
+
+        tool_use_ids = [
+            block["toolUse"]["toolUseId"]
+            for block in msg.get("content", [])
+            if "toolUse" in block
+        ]
+        if not tool_use_ids:
+            sanitized.append(msg)
+            continue
+
+        next_msg = messages[i + 1] if i + 1 < len(messages) else None
+        next_tool_result_ids: set[str] = set()
+        if next_msg and next_msg.get("role") == "user":
+            for block in next_msg.get("content", []):
+                if "toolResult" in block:
+                    next_tool_result_ids.add(block["toolResult"]["toolUseId"])
+
+        missing = [tid for tid in tool_use_ids if tid not in next_tool_result_ids]
+        if not missing:
+            sanitized.append(msg)
+            continue
+
+        logger.warning(
+            "Dropping %d orphan toolUse block(s) from assistant message "
+            "(ids=%s) — no matching toolResult in the next message.",
+            len(missing),
+            missing,
+        )
+        cleaned_content = [
+            block
+            for block in msg.get("content", [])
+            if not ("toolUse" in block and block["toolUse"]["toolUseId"] in missing)
+        ]
+        has_text = any(
+            "text" in b and (b.get("text") or "").strip() for b in cleaned_content
+        )
+        if not has_text:
+            cleaned_content.append({"text": _ORPHAN_TOOLUSE_PLACEHOLDER})
+        sanitized.append({"role": "assistant", "content": cleaned_content})
+
+    return sanitized
+
+
 def simple_message_models_to_strands_messages(
     simple_messages: list[SimpleMessageModel],
     model: type_model_name,
@@ -106,6 +171,10 @@ def simple_message_models_to_strands_messages(
         for message in simple_messages
         if _is_conversation_role(message.role)
     ]
+
+    # Repair orphan toolUse blocks (no matching toolResult after) so Bedrock
+    # Converse accepts the conversation.
+    messages = _sanitize_orphan_tool_uses(messages)
 
     # Add message cache points (same logic as legacy bedrock.py)
     if prompt_caching_enabled and is_prompt_caching_supported(model, target="message"):

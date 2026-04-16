@@ -30,105 +30,55 @@ from app.vector_search import (
 from strands import Agent
 from strands.telemetry.metrics import EventLoopMetrics
 from strands.types.event_loop import StopReason
-from strands.types.content import Message
+from strands.types.content import ContentBlock, Message
 from strands.types.exceptions import MaxTokensReachedException
 
 logger = logging.getLogger(__name__)
 
 
-_FALLBACK_SUMMARY_INSTRUCTION = (
-    "IMPORTANT — tool calls have been paused at the research limit. "
-    "No more tools are available in this turn.\n\n"
-    "Your task now:\n"
-    "1. Carefully read EVERY tool result in the conversation above "
-    "(search results, fetched pages, extracted content, crawled pages). "
-    "Consider both successful results AND any that failed or errored.\n"
-    "2. Using only that gathered content, write a clear, substantive "
-    "answer to the user's original question. Include specific facts, "
-    "details, and quotes from the results — do not just say that "
-    "research was done.\n"
-    "3. Cite sources inline with [^source_id] notation where available.\n"
-    "4. Briefly note any sources that were unavailable or returned errors, "
-    "so the user understands any gaps in the research.\n"
-    "5. At the end of your response, ask the user whether they would like "
-    "you to continue researching for more detail, or whether the current "
-    "answer is sufficient.\n\n"
-    "Do not apologise for the research limit — simply answer and offer to "
-    "dig deeper."
+_ORPHAN_TOOLUSE_SAFETY_MESSAGE = (
+    "I wasn't able to complete that request. Please try asking again or "
+    "rephrase — and let me know if you'd like me to focus on a specific "
+    "part of the task."
 )
 
 
-def _has_text_content(message: Message) -> bool:
-    """Return True if the message has at least one non-empty text block."""
-    for content in message.get("content", []):
-        if "text" in content:
-            text = content.get("text") or ""
-            if text.strip():
-                return True
-    return False
+def _sanitize_result_message(message: Message) -> Message:
+    """Guarantee the assistant message has at least one text block.
 
+    If the message contains `toolUse` blocks with no accompanying text,
+    persisting it to DynamoDB and replaying it in the next turn would
+    produce a Bedrock ValidationException:
 
-def _merge_metrics(
-    primary: EventLoopMetrics, secondary: EventLoopMetrics
-) -> EventLoopMetrics:
-    """Merge accumulated usage/metrics from a fallback call into the primary."""
-    try:
-        for key, value in secondary.accumulated_usage.items():
-            primary.accumulated_usage[key] = (
-                primary.accumulated_usage.get(key, 0) + value
-            )
-    except Exception as e:
-        logger.warning(f"Could not merge fallback metrics: {e}")
-    return primary
+        "tool_use ids were found without tool_result blocks immediately after"
 
-
-def _run_fallback_response(
-    agent: Agent,
-    on_stream: Callable[[str], None] | None,
-    on_reasoning: Callable[[str], None] | None,
-    on_message: Callable[[Message], None] | None,
-) -> tuple[Message, EventLoopMetrics]:
+    The MaxTurnsHook is designed to prevent this at the source (it swaps
+    real tools for a stub so the event loop reaches a natural text reply),
+    but this is a belt-and-braces defence: if anything ever slips through
+    we strip the orphan `toolUse` blocks and substitute a generic apology
+    so the conversation stays well-formed for subsequent turns.
     """
-    Make a follow-up model call WITHOUT tools to force a final text response.
-
-    Used when the main event loop stops without the model producing text
-    (e.g. MaxTurnsHook cut it off while it was still calling tools).
-
-    The key constraint: agent.messages ends with a role="user" tool_result
-    message, so we must NOT pass any new user message — two consecutive user
-    messages would be rejected by Bedrock. Instead, the summary instruction
-    is injected via the system prompt and the agent is called with no
-    additional input so it responds as the next assistant turn.
-    """
-    # Combine the original system prompt with the fallback instruction so the
-    # model knows what to do without any extra user message.
-    base_system = agent.system_prompt or ""
-    combined_system = (
-        f"{base_system}\n\n{_FALLBACK_SUMMARY_INSTRUCTION}"
-        if base_system
-        else _FALLBACK_SUMMARY_INSTRUCTION
+    content = list(message.get("content", []))
+    has_text = any(
+        "text" in block and (block.get("text") or "").strip() for block in content
     )
+    if has_text:
+        return message
 
-    # Build a minimal agent with NO tools so the model must produce text.
-    fallback_agent = Agent(
-        model=agent.model,
-        tools=[],
-        hooks=[],
-        system_prompt=combined_system,
-        messages=list(agent.messages),
-    )
-    # Reuse the streaming callback so tokens stream to the user in real time.
-    fallback_agent.callback_handler = create_callback_handler(
-        on_stream=on_stream,
-        on_reasoning=on_reasoning,
-        on_message=on_message,
-    )
+    has_tool_use = any("toolUse" in block for block in content)
+    if not has_tool_use:
+        return message
 
-    # Call with no new prompt — the existing history (ending with the
-    # tool_result user message) is used as-is; the model responds as
-    # the next assistant turn guided by the system prompt instruction.
-    result = fallback_agent()
-    return result.message, result.metrics
+    logger.warning(
+        "Assistant message contained toolUse blocks without text — "
+        "replacing with a safety response to avoid corrupting conversation "
+        "history."
+    )
+    safe_content: list[ContentBlock] = [
+        block for block in content if "toolUse" not in block
+    ]
+    safe_content.append({"text": _ORPHAN_TOOLUSE_SAFETY_MESSAGE})
+    return {"role": message.get("role", "assistant"), "content": safe_content}
 
 
 def converse_with_strands(
@@ -235,60 +185,17 @@ def converse_with_strands(
 
     stop_reason, result_message, metrics = run_agent(agent)
 
-    # Safety net: if the event loop finished without a final text response
-    # from the model, make a tool-free follow-up call so the user always
-    # sees an answer. This covers:
-    #   1. MaxTurnsHook triggered — the model was still calling tools when
-    #      we hit the 10-call budget, so Strands returned the last tool_use
-    #      message (no text).
-    #   2. The model stopped for any other reason without producing text.
-    #
-    # If the model already produced text alongside tool_use blocks, we keep
-    # that response as-is to avoid duplicating work.
-    if not _has_text_content(result_message):
-        if max_turns_hook.limit_reached:
-            logger.warning(
-                f"Tool-call limit hit ({max_turns_hook.tool_call_count}) "
-                "and no text response was produced. Running tool-free "
-                "follow-up so the agent interrogates every tool result "
-                "and responds to the user."
-            )
-        else:
-            logger.warning(
-                f"Event loop stopped with no text response "
-                f"(stop_reason={stop_reason}). "
-                "Running tool-free follow-up to produce a final response."
-            )
+    if max_turns_hook.limit_reached:
+        logger.info(
+            f"Tool-call budget reached ({max_turns_hook.tool_call_count} calls). "
+            "Stub tool substitution forced the model to respond in text."
+        )
 
-        try:
-            fallback_message, fallback_metrics = _run_fallback_response(
-                agent=agent,
-                on_stream=on_stream,
-                on_reasoning=on_reasoning,
-                on_message=on_message,
-            )
-            if _has_text_content(fallback_message):
-                result_message = fallback_message
-                # Stop reason is now end_turn since the fallback produced text
-                stop_reason = "end_turn"
-                # Merge metrics so token counts / price reflect both calls
-                metrics = _merge_metrics(metrics, fallback_metrics)
-                logger.info(
-                    "Fallback call produced a text response. "
-                    f"Added tokens — input: {fallback_metrics.accumulated_usage.get('inputTokens', 0)}, "
-                    f"output: {fallback_metrics.accumulated_usage.get('outputTokens', 0)}."
-                )
-            else:
-                logger.warning(
-                    "Fallback call still returned no text. Keeping original "
-                    "result message."
-                )
-        except Exception as e:
-            logger.error(
-                f"Fallback response call failed: {e}. "
-                "Returning original result message.",
-                exc_info=True,
-            )
+    # Defensive: guarantee the message has text content before persisting so
+    # follow-up turns don't hit the Bedrock "orphan tool_use" validation
+    # error. The MaxTurnsHook should prevent this upstream, but this is the
+    # final safety net.
+    result_message = _sanitize_result_message(result_message)
 
     # Convert Strands Message to MessageModel
     message = strands_message_to_message_model(
