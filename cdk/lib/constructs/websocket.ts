@@ -66,6 +66,13 @@ export class WebSocket extends Construct {
             expiration: Duration.days(1),
             id: "ExpireWebSocketChunks",
           },
+          {
+            // Extracted document text cached for persistent conversation context.
+            // 90 days covers typical conversation lifetimes while bounding costs.
+            prefix: "conversation-docs/",
+            expiration: Duration.days(90),
+            id: "ExpireConversationDocContext",
+          },
         ],
         // CORS allows the browser to PUT the payload directly to S3 via
         // a pre-signed URL, bypassing WebSocket chunk limits entirely.
