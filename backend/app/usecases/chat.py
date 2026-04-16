@@ -56,6 +56,10 @@ from app.usecases.bot import fetch_bot, modify_bot_last_used_time, modify_bot_st
 from app.usecases.global_config import get_title_model
 from app.user import User
 from app.base_prompt import BASE_SYSTEM_PROMPT
+from app.conversation_document_store import (
+    find_historical_attachments,
+    get_or_update_document_context,
+)
 from app.document_chunker import process_attachments_for_context_window
 from app.pdf_url_handler import download_pdf, extract_pdf_urls
 from app.utils import get_aest_now, get_current_time
@@ -702,6 +706,19 @@ def chat(
             SimpleMessageModel.from_message_model(message=message_map[user_msg_id]),
         )
         message_for_continue_generate = None
+
+    # Re-inject document context from historical messages as a system instruction
+    # so the model retains access to uploaded files throughout the conversation.
+    # This must run BEFORE _strip_attachments_from_history while the attachment
+    # bytes are still present in the message list.
+    historical_attachments = find_historical_attachments(messages)
+    if historical_attachments:
+        doc_context = get_or_update_document_context(
+            conversation_id=chat_input.conversation_id,
+            historical_attachments=historical_attachments,
+        )
+        if doc_context:
+            instructions.append(doc_context)
 
     # Strip document/image attachments from historical messages to avoid
     # exceeding Bedrock's 100-page PDF limit across the full conversation
