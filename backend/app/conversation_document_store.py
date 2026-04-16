@@ -38,11 +38,16 @@ _PREFIX = "conversation-docs"
 # 100 000 chars ≈ 25 000 tokens — enough for most documents.
 _MAX_CHARS_PER_DOC = 100_000
 
+# Module-level cached S3 client (re-used across Lambda invocations)
+_s3_client = None
+
 
 def _s3():
-    import boto3
-
-    return boto3.client("s3")
+    global _s3_client
+    if _s3_client is None:
+        import boto3
+        _s3_client = boto3.client("s3")
+    return _s3_client
 
 
 def _s3_key(conversation_id: str) -> str:
@@ -56,10 +61,15 @@ def _load_stored_context(conversation_id: str) -> list[dict]:
     try:
         resp = _s3().get_object(Bucket=_BUCKET, Key=_s3_key(conversation_id))
         return json.loads(resp["Body"].read())
-    except _s3().exceptions.NoSuchKey:
-        return []
     except Exception as exc:
-        # A missing or unreadable object is not fatal — we just re-extract.
+        from botocore.exceptions import ClientError
+
+        if isinstance(exc, ClientError):
+            code = exc.response.get("Error", {}).get("Code", "")
+            if code in ("NoSuchKey", "404"):
+                # Normal case — no context stored yet for this conversation
+                return []
+        # Any other error is non-fatal — we just re-extract.
         logger.warning("Failed to load document context from S3: %s", exc)
         return []
 
