@@ -1,16 +1,16 @@
 # Bedrock Chat — Claude Code Session Memory
 
 ## Project Overview
-AWS-native chatbot using Amazon Bedrock. Deployed via CDK + CodeBuild from this repo (DPenniket/bedrock-chat, branch `v3`).
+AWS-native chatbot using Amazon Bedrock. Deployed via CDK + CodeBuild from this repo (DPenniket/bedrock-chat, branch `v4`).
 - **Frontend**: React/Vite, hosted on S3/CloudFront
 - **Backend**: Lambda (Python 3.13), API Gateway (WebSocket + REST)
 - **Repo**: https://github.com/DPenniket/bedrock-chat
 
 ## Deploy Command (run from CloudShell)
 ```bash
-./bin.sh --disable-self-register --bedrock-region ap-southeast-2 --repo-url https://github.com/DPenniket/bedrock-chat.git --version v3
+./bin.sh --disable-self-register --bedrock-region ap-southeast-2 --repo-url https://github.com/DPenniket/bedrock-chat.git --version v4
 ```
-- CodeBuild does: `git clone --branch v3` then `npx cdk deploy --require-approval never --all`
+- CodeBuild does: `git clone --branch v4` then `npx cdk deploy --require-approval never --all`
 - Deploy is to `ap-southeast-2` (Sydney)
 
 ---
