@@ -2,12 +2,14 @@
 Tavily Crawl tool — crawls a website starting from a URL.
 
 Uses the Tavily Crawl API to navigate a website, follow links, and extract
-content from nested pages. Useful for site-wide research, documentation
-reading, or gathering information across multiple related pages.
+content from nested pages. Falls back to direct HTTP fetch of the starting
+URL when Tavily is unavailable or fails.
 """
 
 import logging
+import re
 
+import requests
 from app.repositories.models.custom_bot import BotModel
 from strands import tool
 from strands.types.tools import AgentTool as StrandsAgentTool
@@ -16,12 +18,51 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 MAX_CONTENT_CHARS = 6000  # Per page — keep tighter since crawl returns many pages
+REQUEST_TIMEOUT_SECONDS = 15
 
 
 def _truncate(text: str, limit: int = MAX_CONTENT_CHARS) -> str:
     if not text or len(text) <= limit:
         return text
     return text[:limit] + f"\n\n[Truncated — {len(text)} characters total]"
+
+
+def _strip_html_tags(html: str) -> str:
+    """Lightweight HTML -> plain-text conversion."""
+    html = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r"<(br|p|div|h[1-6]|li|tr|blockquote)[^>]*>", "\n", html, flags=re.IGNORECASE)
+    html = re.sub(r"<[^>]+>", "", html)
+    html = re.sub(r"\n{3,}", "\n\n", html)
+    html = re.sub(r"[ \t]+", " ", html)
+    return html.strip()
+
+
+def _fetch_url_direct(url: str) -> str | None:
+    """Fetch a URL via direct HTTP as a fallback when Tavily is unavailable."""
+    try:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (compatible; BedrockChatAgent/1.0; "
+                "+https://github.com/aws-samples/bedrock-claude-chat)"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/json,text/plain,*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        response = requests.get(
+            url, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS, allow_redirects=True
+        )
+        response.raise_for_status()
+        content_type = response.headers.get("Content-Type", "")
+        if "json" in content_type:
+            text = response.text
+        elif "html" in content_type or "xml" in content_type:
+            text = _strip_html_tags(response.text)
+        else:
+            text = response.text
+        return text
+    except Exception as e:
+        logger.warning(f"[TAVILY_CRAWL] Direct fetch failed for {url}: {e}")
+        return None
 
 
 def create_tavily_crawl_tool(bot: BotModel | None = None) -> StrandsAgentTool:
@@ -54,17 +95,6 @@ def create_tavily_crawl_tool(bot: BotModel | None = None) -> StrandsAgentTool:
             f"[TAVILY_CRAWL] Crawling {url} (depth={max_depth}, limit={limit})"
         )
 
-        if not TAVILY_API_KEY:
-            return {
-                "status": "error",
-                "content": [
-                    {
-                        "text": "Tavily API key is not configured. "
-                        "Set TAVILY_API_KEY or TAVILY_API_KEY_SECRET_ARN."
-                    }
-                ],
-            }
-
         if not url.startswith(("http://", "https://")):
             return {
                 "status": "error",
@@ -75,74 +105,99 @@ def create_tavily_crawl_tool(bot: BotModel | None = None) -> StrandsAgentTool:
         max_depth = max(1, min(max_depth, 5))
         limit = max(1, min(limit, 50))
 
-        try:
-            from tavily import TavilyClient
+        content_blocks: list[dict] = []
 
-            client = TavilyClient(api_key=TAVILY_API_KEY)
+        # Try Tavily first if API key is available
+        if TAVILY_API_KEY:
+            try:
+                from tavily import TavilyClient
 
-            crawl_kwargs: dict = {
-                "url": url,
-                "max_depth": max_depth,
-                "limit": limit,
-                "format": "markdown",
-                "timeout": 120,
-            }
-            if instructions:
-                crawl_kwargs["instructions"] = instructions
+                client = TavilyClient(api_key=TAVILY_API_KEY)
 
-            response = client.crawl(**crawl_kwargs)
+                crawl_kwargs: dict = {
+                    "url": url,
+                    "max_depth": max_depth,
+                    "limit": limit,
+                    "format": "markdown",
+                    "timeout": 120,
+                }
+                if instructions:
+                    crawl_kwargs["instructions"] = instructions
 
-            results = response.get("results", [])
-            failed = response.get("failed_results", [])
+                response = client.crawl(**crawl_kwargs)
 
-            if failed:
-                logger.warning(f"[TAVILY_CRAWL] Failed pages: {len(failed)}")
+                results = response.get("results", [])
+                failed = response.get("failed_results", [])
 
-            content_blocks: list[dict] = []
-            for r in results:
-                raw_content = r.get("raw_content", "")
-                page_url = r.get("url", "")
-                content_blocks.append(
-                    {
-                        "json": {
-                            "content": _truncate(raw_content),
-                            "source_name": page_url,
-                            "source_link": page_url,
+                if failed:
+                    logger.warning(f"[TAVILY_CRAWL] Failed pages: {len(failed)}")
+
+                for r in results:
+                    raw_content = r.get("raw_content", "")
+                    page_url = r.get("url", "")
+                    content_blocks.append(
+                        {
+                            "json": {
+                                "content": _truncate(raw_content),
+                                "source_name": page_url,
+                                "source_link": page_url,
+                            }
                         }
-                    }
+                    )
+
+                # Report failures (don't include as content blocks — they add noise)
+                if failed:
+                    for f in failed:
+                        fail_url = f.get("url", "unknown")
+                        fail_error = f.get("error", "unknown error")
+                        logger.warning(
+                            f"[TAVILY_CRAWL] Page failed: {fail_url} — {fail_error}"
+                        )
+
+                logger.info(
+                    f"[TAVILY_CRAWL] Crawled {len(results)} page(s) from {url}, "
+                    f"{len(failed or [])} failed"
                 )
 
-            # Report failures
-            for f in (failed or []):
-                fail_url = f.get("url", "unknown")
-                fail_error = f.get("error", "unknown error")
-                content_blocks.append(
-                    {
-                        "json": {
-                            "content": f"Failed to crawl: {fail_error}",
-                            "source_name": f"[FAILED] {fail_url}",
-                            "source_link": fail_url,
-                        }
-                    }
+            except Exception as e:
+                logger.warning(
+                    f"[TAVILY_CRAWL] Tavily API error, falling back to direct HTTP: {e}"
                 )
+                # Fall through to direct HTTP fallback below
 
+        # Direct HTTP fallback — fetch starting URL if Tavily failed or was unavailable
+        if not content_blocks:
             logger.info(
-                f"[TAVILY_CRAWL] Crawled {len(results)} page(s) from {url}, "
-                f"{len(failed or [])} failed"
+                f"[TAVILY_CRAWL] Using direct HTTP fallback for starting URL: {url}"
             )
+            text = _fetch_url_direct(url)
+            if text:
+                content_blocks.append(
+                    {
+                        "json": {
+                            "content": _truncate(text),
+                            "source_name": url,
+                            "source_link": url,
+                        }
+                    }
+                )
+            else:
+                return {
+                    "status": "error",
+                    "content": [
+                        {
+                            "text": f"Could not crawl {url}. "
+                            "The site may be blocking automated access. "
+                            "Try using fetch_website instead for individual pages."
+                        }
+                    ],
+                }
 
-            return {
-                "status": "success" if results else "error",
-                "content": content_blocks
-                if content_blocks
-                else [{"text": f"No content could be crawled from {url}."}],
-            }
-
-        except Exception as e:
-            logger.error(f"[TAVILY_CRAWL] Error: {e}")
-            return {
-                "status": "error",
-                "content": [{"text": f"Crawl error: {str(e)}"}],
-            }
+        return {
+            "status": "success" if content_blocks else "error",
+            "content": content_blocks
+            if content_blocks
+            else [{"text": f"No content could be crawled from {url}."}],
+        }
 
     return tavily_crawl

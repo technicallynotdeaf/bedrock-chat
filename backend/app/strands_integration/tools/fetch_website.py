@@ -156,7 +156,7 @@ def _fetch_direct(url: str, method: str, body: str) -> str:
 
 def create_fetch_website_tool(bot: BotModel | None = None) -> StrandsAgentTool:
     @tool
-    def fetch_website(url: str, method: str = "GET", body: str = "") -> str:
+    def fetch_website(url: str, method: str = "GET", body: str = "") -> dict | str:
         """
         Fetch and analyse the content of a web page or HTTP endpoint.
 

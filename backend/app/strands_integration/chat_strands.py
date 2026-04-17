@@ -30,10 +30,55 @@ from app.vector_search import (
 from strands import Agent
 from strands.telemetry.metrics import EventLoopMetrics
 from strands.types.event_loop import StopReason
-from strands.types.content import Message
+from strands.types.content import ContentBlock, Message
 from strands.types.exceptions import MaxTokensReachedException
 
 logger = logging.getLogger(__name__)
+
+
+_ORPHAN_TOOLUSE_SAFETY_MESSAGE = (
+    "I wasn't able to complete that request. Please try asking again or "
+    "rephrase — and let me know if you'd like me to focus on a specific "
+    "part of the task."
+)
+
+
+def _sanitize_result_message(message: Message) -> Message:
+    """Guarantee the assistant message has at least one text block.
+
+    If the message contains `toolUse` blocks with no accompanying text,
+    persisting it to DynamoDB and replaying it in the next turn would
+    produce a Bedrock ValidationException:
+
+        "tool_use ids were found without tool_result blocks immediately after"
+
+    The MaxTurnsHook is designed to prevent this at the source (it swaps
+    real tools for a stub so the event loop reaches a natural text reply),
+    but this is a belt-and-braces defence: if anything ever slips through
+    we strip the orphan `toolUse` blocks and substitute a generic apology
+    so the conversation stays well-formed for subsequent turns.
+    """
+    content = list(message.get("content", []))
+    has_text = any(
+        "text" in block and (block.get("text") or "").strip() for block in content
+    )
+    if has_text:
+        return message
+
+    has_tool_use = any("toolUse" in block for block in content)
+    if not has_tool_use:
+        return message
+
+    logger.warning(
+        "Assistant message contained toolUse blocks without text — "
+        "replacing with a safety response to avoid corrupting conversation "
+        "history."
+    )
+    safe_content: list[ContentBlock] = [
+        block for block in content if "toolUse" not in block
+    ]
+    safe_content.append({"text": _ORPHAN_TOOLUSE_SAFETY_MESSAGE})
+    return {"role": message.get("role", "assistant"), "content": safe_content}
 
 
 def converse_with_strands(
@@ -81,7 +126,7 @@ def converse_with_strands(
         on_thinking=on_thinking,
         on_tool_result=on_tool_result,
     )
-    max_turns_hook = MaxTurnsHook(max_tool_calls=10)
+    max_turns_hook = MaxTurnsHook(max_tool_calls=30, reserve_for_response=5)
 
     prompt_caching_enabled = bot.prompt_caching_enabled if bot is not None else True
     # Normal chat (no bot) exposes the internet_search tool when the user toggles it on,
@@ -144,6 +189,18 @@ def converse_with_strands(
             )
 
     stop_reason, result_message, metrics = run_agent(agent)
+
+    if max_turns_hook.limit_reached:
+        logger.info(
+            f"Tool-call budget reached ({max_turns_hook.tool_call_count} calls). "
+            "Stub tool substitution forced the model to respond in text."
+        )
+
+    # Defensive: guarantee the message has text content before persisting so
+    # follow-up turns don't hit the Bedrock "orphan tool_use" validation
+    # error. The MaxTurnsHook should prevent this upstream, but this is the
+    # final safety net.
+    result_message = _sanitize_result_message(result_message)
 
     # Convert Strands Message to MessageModel
     message = strands_message_to_message_model(

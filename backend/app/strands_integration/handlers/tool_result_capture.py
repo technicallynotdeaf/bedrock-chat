@@ -54,19 +54,27 @@ class ToolResultCapture(HookProvider):
         """Handler called after a tool is executed."""
         logger.debug("After tool execution: %r", event)
 
-        # Convert event to ToolRunResult using the new function
-        tool_result = strands_tool_result_to_tool_run_result(
-            tool_name=event.tool_use["name"],
-            result=event.result,
-        )
+        try:
+            # Convert event to ToolRunResult using the new function
+            tool_result = strands_tool_result_to_tool_run_result(
+                tool_name=event.tool_use["name"],
+                result=event.result,
+            )
 
-        # Call callback if provided
-        if self.on_tool_result:
-            self.on_tool_result(tool_result)
+            # Call callback if provided
+            if self.on_tool_result:
+                self.on_tool_result(tool_result)
 
-        # Convert ToolRunResult back to Strands ToolResult format with `source_id` for citation
-        enhanced_result = tool_run_result_to_strands_tool_result(
-            result=tool_result,
-            display_citation=self.display_citation,
-        )
-        event.result = enhanced_result
+            # Convert ToolRunResult back to Strands ToolResult format with `source_id` for citation
+            enhanced_result = tool_run_result_to_strands_tool_result(
+                result=tool_result,
+                display_citation=self.display_citation,
+            )
+            event.result = enhanced_result
+
+        except Exception as e:
+            logger.error(
+                f"Error processing tool result for {event.tool_use.get('name', 'unknown')}: {e}",
+                exc_info=True,
+            )
+            # Preserve the original result so the model still sees the tool output
