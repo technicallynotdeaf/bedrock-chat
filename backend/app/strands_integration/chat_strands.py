@@ -126,7 +126,7 @@ def converse_with_strands(
         on_thinking=on_thinking,
         on_tool_result=on_tool_result,
     )
-    max_turns_hook = MaxTurnsHook(max_tool_calls=10)
+    max_turns_hook = MaxTurnsHook(max_tool_calls=30, reserve_for_response=5)
 
     prompt_caching_enabled = bot.prompt_caching_enabled if bot is not None else True
     has_tools = bot is not None and bot.is_agent_enabled()
