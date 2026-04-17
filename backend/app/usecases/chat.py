@@ -58,7 +58,7 @@ from app.user import User
 from app.base_prompt import BASE_SYSTEM_PROMPT
 from app.conversation_document_store import (
     find_historical_attachments,
-    get_or_update_document_context,
+    get_or_update_persistent_attachments,
 )
 from app.document_chunker import process_attachments_for_context_window
 from app.pdf_url_handler import download_pdf, extract_pdf_urls
@@ -707,35 +707,46 @@ def chat(
         )
         message_for_continue_generate = None
 
-    # Re-inject document context from historical messages as a system instruction
-    # so the model retains access to uploaded files throughout the conversation.
-    # This must run BEFORE _strip_attachments_from_history while the attachment
-    # bytes are still present in the message list.
+    # Persist historical document attachments to S3 and load all stored ones.
+    # Must run BEFORE _strip_attachments_from_history while bytes are present.
     historical_attachments = find_historical_attachments(messages)
-    if historical_attachments:
-        doc_context = get_or_update_document_context(
-            conversation_id=chat_input.conversation_id,
-            historical_attachments=historical_attachments,
-        )
-        if doc_context:
-            instructions.append(doc_context)
+    persistent_attachments = get_or_update_persistent_attachments(
+        conversation_id=chat_input.conversation_id,
+        historical_attachments=historical_attachments,
+    )
 
     # Strip document/image attachments from historical messages to avoid
     # exceeding Bedrock's 100-page PDF limit across the full conversation
     messages = _strip_attachments_from_history(messages)
 
+    # Re-inject persisted documents into the current user message so Bedrock
+    # parses them natively on every turn — same quality as turn 1, no pypdf.
+    # Find the last user message AFTER stripping so we target the right one.
+    last_user_msg = None
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].role == "user":
+            last_user_msg = messages[i]
+            break
+
+    if last_user_msg is not None and persistent_attachments:
+        existing_names = {
+            c.file_name
+            for c in last_user_msg.content
+            if isinstance(c, AttachmentContentModel)
+        }
+        new_attachments = [
+            a for a in persistent_attachments
+            if a.file_name not in existing_names
+        ]
+        if new_attachments:
+            last_user_msg.content = new_attachments + last_user_msg.content
+
     # Chunk large document attachments in the current user message to avoid
     # exceeding the model's context window (~200K tokens)
-    if messages:
-        last_user_msg = None
-        for i in range(len(messages) - 1, -1, -1):
-            if messages[i].role == "user":
-                last_user_msg = messages[i]
-                break
-        if last_user_msg is not None:
-            last_user_msg.content = process_attachments_for_context_window(
-                last_user_msg.content
-            )
+    if last_user_msg is not None:
+        last_user_msg.content = process_attachments_for_context_window(
+            last_user_msg.content
+        )
 
     generation_params = bot.generation_params if bot else None
 
