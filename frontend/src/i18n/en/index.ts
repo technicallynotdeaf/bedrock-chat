@@ -7,7 +7,7 @@ const translation = {
     },
     app: {
       name: 'AA Bedrock',
-      inputMessage: 'How can I Help You?',
+      inputMessage: 'How can I help you?',
       myBots: 'My Bots',
       discoverBots: 'Discover Bots',
       pinnedBots: 'Pinned Bots',

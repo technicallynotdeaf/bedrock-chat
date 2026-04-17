@@ -574,7 +574,13 @@ const ChatPage: React.FC = () => {
                         </p>
                       )}
                     </div>
-                  ) : null}
+                  ) : (
+                    <div
+                      className="text-center text-3xl font-medium text-aws-font-color-light dark:text-aws-font-color-dark"
+                      style={{ fontFamily: '"Yu Gothic Medium", "Yu Gothic", YuGothic, sans-serif' }}>
+                      Welcome to AA Bedrock
+                    </div>
+                  )}
                 </div>
               )}
 
