@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { JSONTree } from 'react-json-tree';
+import { PiArrowSquareOut } from 'react-icons/pi';
 
 import { RelatedDocument } from '../@types/conversation';
 import { getAgentName } from '../features/agent/functions/formatDescription';
@@ -53,18 +54,18 @@ const RelatedDocumentViewer: React.FC<{
         )}
 
         {(sourceName || sourceLink) && (
-          <div className="my-1 border-t pt-1 italic">
-            {t('bot.label.referenceLink')}:
+          <div className="my-1 border-t pt-2">
             {sourceLink ? (
-              <span
-                className="ml-1 cursor-pointer underline"
-                onClick={() => {
-                  window.open(sourceLink, '_blank');
-                }}>
+              <a
+                className="inline-flex items-center gap-1 font-semibold text-aws-sea-blue-light dark:text-aws-sea-blue-dark hover:underline cursor-pointer"
+                title={sourceLink}
+                onClick={() => window.open(sourceLink, '_blank')}
+              >
+                <PiArrowSquareOut className="shrink-0" />
                 {sourceName ? getAgentName(sourceName, t) : sourceLink}
-              </span>
+              </a>
             ) : (
-              <span className="ml-1">
+              <span className="font-semibold">
                 {getAgentName(sourceName!, t)}
               </span>
             )}

@@ -3,6 +3,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { AgentToolState } from '../types';
 import { JSONTree } from 'react-json-tree';
 import {
+  PiArrowSquareOut,
   PiCaretDown,
   PiCaretUp,
   PiCheckCircle,
@@ -185,20 +186,25 @@ const ToolCard: React.FC<ToolCardProps> = ({
   }> = ({
     relatedDocument: document,
   }) => {
+    const linkTitle = document.sourceName ?? document.sourceLink;
+
     return (
       <div className="flex flex-col">
-        {document.sourceName && document.sourceName !== name && (
-          <div className="font-semibold break-all line-clamp-1">
-            {document.sourceName}
-          </div>
-        )}
-        {document.sourceLink && (
-          <span
-            className="italic break-all line-clamp-1 cursor-pointer underline"
+        {document.sourceLink ? (
+          <a
+            className="inline-flex items-center gap-1 font-semibold text-aws-sea-blue-light dark:text-aws-sea-blue-dark hover:underline cursor-pointer break-all line-clamp-1"
+            title={document.sourceLink}
             onClick={() => window.open(document.sourceLink, '_blank')}
           >
-            {document.sourceLink}
-          </span>
+            <PiArrowSquareOut className="shrink-0" />
+            {linkTitle}
+          </a>
+        ) : (
+          document.sourceName && document.sourceName !== name && (
+            <div className="font-semibold break-all line-clamp-1">
+              {document.sourceName}
+            </div>
+          )
         )}
         {'text' in document.content && (
           <div className="break-all line-clamp-2 dark:text-aws-font-color-dark">
