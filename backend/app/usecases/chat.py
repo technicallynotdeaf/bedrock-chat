@@ -503,6 +503,7 @@ def chat(
 
     # Process PDF URLs and web URLs concurrently — they are independent I/O
     web_url_context: list[tuple[str, str]] = []
+    processed_pdf_urls: list[str] = []
     if not chat_input.continue_generate:
         user_message = message_map.get(user_msg_id)
         if user_message:
@@ -558,6 +559,17 @@ def chat(
                 f"--- Content from {url} ---\n{content}\n--- End of content ---\n"
             )
         instructions.append("\n".join(url_context_lines))
+
+    # Tell the model that PDF URLs have been downloaded and are already attached —
+    # without this note it may still say "I cannot access URLs" even when the bytes are present.
+    if processed_pdf_urls:
+        instructions.append(
+            "The user's message references PDF URL(s) that have been automatically downloaded "
+            "and are attached to this message as document blocks. Do not say you cannot access "
+            "URLs — the PDF content is already available. Analyse the attached document(s) to "
+            "answer the user's question. Successfully fetched: "
+            + ", ".join(processed_pdf_urls)
+        )
 
     related_documents: list[RelatedDocumentModel] = []
     search_results: list[SearchResult] = []
