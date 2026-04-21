@@ -12,8 +12,10 @@ from requests.exceptions import RequestException
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# Max PDF size to download (default 4.5 MB to stay within Converse API limits)
-MAX_PDF_SIZE_BYTES = int(os.environ.get("MAX_PDF_URL_SIZE_BYTES", 4_500_000))
+# Max PDF size to download. Larger than Bedrock's 4.5MB native document cap because
+# document_chunker.py extracts text from anything > 2.5MB and truncates into chunks,
+# so oversized PDFs still work — they just lose native PDF formatting features.
+MAX_PDF_SIZE_BYTES = int(os.environ.get("MAX_PDF_URL_SIZE_BYTES", 30_000_000))
 
 # Timeout for downloading PDFs (seconds)
 PDF_DOWNLOAD_TIMEOUT = int(os.environ.get("PDF_DOWNLOAD_TIMEOUT", 30))
