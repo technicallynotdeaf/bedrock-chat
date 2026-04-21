@@ -61,7 +61,7 @@ from app.conversation_document_store import (
     get_or_update_persistent_attachments,
 )
 from app.document_chunker import process_attachments_for_context_window
-from app.pdf_url_handler import download_pdf, extract_pdf_urls
+from app.pdf_url_handler import download_pdf, extract_markdown_urls, extract_pdf_urls
 from app.utils import get_aest_now, get_current_time
 from app.web_url_handler import extract_web_urls, fetch_urls_content
 from app.vector_search import (
@@ -79,30 +79,47 @@ logger.setLevel(logging.INFO)
 def process_pdf_urls_in_message(message: MessageModel) -> list[str]:
     """Scan text content in a message for PDF URLs, download them, and add as attachments.
 
+    Handles:
+    - Bare .pdf extension URLs: https://example.com/paper.pdf
+    - Markdown-linked .pdf URLs: [title](https://example.com/paper.pdf)
+    - Markdown-linked non-.pdf URLs that serve PDF content: [title](https://arxiv.org/pdf/2312.12345)
+
     Returns a list of successfully processed PDF URLs for logging/display purposes.
     """
-    # Collect all PDF URLs from text content
     pdf_urls: list[str] = []
+    markdown_candidate_urls: list[str] = []
+
     for content in message.content:
         if isinstance(content, TextContentModel):
+            # .pdf extension URLs (bare and markdown-embedded)
             urls = extract_pdf_urls(content.body)
-            pdf_urls.extend(urls)
+            pdf_urls.extend(u for u in urls if u not in pdf_urls)
+            # All markdown-linked URLs — try non-.pdf ones as PDF candidates
+            for url in extract_markdown_urls(content.body):
+                if url not in pdf_urls and url not in markdown_candidate_urls:
+                    markdown_candidate_urls.append(url)
 
-    if not pdf_urls:
+    # Limit total PDFs to 5; allocate remaining slots to markdown candidates
+    remaining_slots = max(0, 5 - len(pdf_urls))
+    candidates = markdown_candidate_urls[:remaining_slots]
+    all_urls = pdf_urls + candidates
+
+    if not all_urls:
         return []
 
-    logger.info(f"Found {len(pdf_urls)} PDF URL(s) in message: {pdf_urls}")
+    logger.info(
+        f"Found {len(pdf_urls)} PDF URL(s) and {len(candidates)} markdown URL candidate(s) to try"
+    )
 
-    # Download PDFs in parallel
     from concurrent.futures import ThreadPoolExecutor
 
-    with ThreadPoolExecutor(max_workers=min(len(pdf_urls), 5)) as executor:
-        downloads = list(executor.map(download_pdf, pdf_urls))
+    with ThreadPoolExecutor(max_workers=min(len(all_urls), 5)) as executor:
+        downloads = list(executor.map(download_pdf, all_urls))
 
     processed_urls: list[str] = []
-    for url, result in zip(pdf_urls, downloads):
+    for url, result in zip(all_urls, downloads):
         if result is None:
-            logger.warning(f"Skipping PDF URL (download failed): {url}")
+            logger.warning(f"Skipping URL (download failed or not a PDF): {url}")
             continue
 
         filename, pdf_bytes = result
@@ -112,7 +129,6 @@ def process_pdf_urls_in_message(message: MessageModel) -> list[str]:
             file_name=filename,
         )
 
-        # Insert attachment before the text content (same as normal file attachments)
         message.content.insert(0, attachment)
         processed_urls.append(url)
         logger.info(f"Added PDF attachment from URL: {url} as {filename}")
