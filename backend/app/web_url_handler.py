@@ -162,6 +162,9 @@ def _fetch_direct(url: str) -> str | None:
         response.raise_for_status()
 
         content_type = response.headers.get("Content-Type", "")
+        if "pdf" in content_type.lower():
+            logger.info(f"[WEB_URL_HANDLER] Skipping PDF response (handled by PDF processor): {url}")
+            return None
         if "json" in content_type:
             text = response.text
         elif "html" in content_type or "xml" in content_type:

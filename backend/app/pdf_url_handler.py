@@ -12,8 +12,10 @@ from requests.exceptions import RequestException
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# Max PDF size to download (default 4.5 MB to stay within Converse API limits)
-MAX_PDF_SIZE_BYTES = int(os.environ.get("MAX_PDF_URL_SIZE_BYTES", 4_500_000))
+# Max PDF size to download. Larger than Bedrock's 4.5MB native document cap because
+# document_chunker.py extracts text from anything > 2.5MB and truncates into chunks,
+# so oversized PDFs still work — they just lose native PDF formatting features.
+MAX_PDF_SIZE_BYTES = int(os.environ.get("MAX_PDF_URL_SIZE_BYTES", 30_000_000))
 
 # Timeout for downloading PDFs (seconds)
 PDF_DOWNLOAD_TIMEOUT = int(os.environ.get("PDF_DOWNLOAD_TIMEOUT", 30))
@@ -30,10 +32,34 @@ PDF_URL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Regex to extract URLs from Markdown link syntax: [link text](url)
+MARKDOWN_LINK_PATTERN = re.compile(
+    r'\[[^\]]*\]\((https?://[^\s)]+)\)',
+    re.IGNORECASE,
+)
+
 
 def extract_pdf_urls(text: str) -> list[str]:
-    """Extract PDF URLs from a text string."""
-    return PDF_URL_PATTERN.findall(text)
+    """Extract PDF URLs from text, including those inside Markdown links [text](url)."""
+    # Bare .pdf URLs (handles both raw and markdown-embedded .pdf links)
+    bare = PDF_URL_PATTERN.findall(text)
+    # URLs inside Markdown links that end with .pdf (in case the bare pattern misses them)
+    md = [
+        u for u in MARKDOWN_LINK_PATTERN.findall(text)
+        if re.search(r'\.pdf(\?[^\s)]*)?$', u, re.IGNORECASE)
+    ]
+    seen: set[str] = set()
+    result: list[str] = []
+    for url in bare + md:
+        if url not in seen:
+            seen.add(url)
+            result.append(url)
+    return result
+
+
+def extract_markdown_urls(text: str) -> list[str]:
+    """Return all URLs found inside Markdown link syntax [text](url)."""
+    return MARKDOWN_LINK_PATTERN.findall(text)
 
 
 def _get_filename_from_url(url: str) -> str:
@@ -43,6 +69,9 @@ def _get_filename_from_url(url: str) -> str:
     basename = os.path.basename(path)
     if basename and basename.lower().endswith(".pdf"):
         return basename
+    # For paths like /pdf/2312.12345, use the last path segment + .pdf
+    if basename and "." not in basename:
+        return basename + ".pdf"
     return "document.pdf"
 
 
@@ -78,7 +107,7 @@ def download_pdf(url: str) -> tuple[str, bytes] | None:
                 )
                 return None
 
-        # Verify it looks like a PDF
+        # Verify it looks like a PDF via magic bytes (works for any URL regardless of extension)
         if not content[:5] == b"%PDF-":
             logger.warning(f"Content from {url} does not appear to be a valid PDF.")
             return None

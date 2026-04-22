@@ -217,10 +217,23 @@ const InputChatContent = forwardRef<HTMLElement, Props>(
       return content === '' || props.disabledSend;
     }, [content, props.disabledSend]);
 
-    // Detect PDF URLs in the text content
+    // Detect PDF URLs in text: bare .pdf URLs + all Markdown links [text](url)
     const detectedPdfUrls = useMemo(() => {
       const pdfUrlPattern = /https?:\/\/[^\s<>"']+\.pdf(?:\?[^\s<>"']*)?/gi;
-      return content.match(pdfUrlPattern) ?? [];
+      const markdownLinkPattern = /\[[^\]]*\]\((https?:\/\/[^\s)]+)\)/gi;
+      const bare = content.match(pdfUrlPattern) ?? [];
+      const seen = new Set(bare);
+      const result = [...bare];
+      let m: RegExpExecArray | null;
+      markdownLinkPattern.lastIndex = 0;
+      while ((m = markdownLinkPattern.exec(content)) !== null) {
+        const url = m[1];
+        if (!seen.has(url)) {
+          seen.add(url);
+          result.push(url);
+        }
+      }
+      return result;
     }, [content]);
 
     const inputRef = useRef<HTMLDivElement>(null);
@@ -622,10 +635,14 @@ const InputChatContent = forwardRef<HTMLElement, Props>(
           {detectedPdfUrls.length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 px-3 pt-2.5">
               {detectedPdfUrls.map((url, idx) => {
-                const filename = url.split('/').pop()?.split('?')[0] || 'document.pdf';
-                const displayName = decodeURIComponent(filename).length > 30
-                  ? decodeURIComponent(filename).substring(0, 27) + '...'
-                  : decodeURIComponent(filename);
+                const rawName = url.split('/').pop()?.split('?')[0] || '';
+                const filename = rawName.toLowerCase().endsWith('.pdf')
+                  ? rawName
+                  : rawName || 'document.pdf';
+                const decoded = decodeURIComponent(filename);
+                const displayName = decoded.length > 30
+                  ? decoded.substring(0, 27) + '...'
+                  : decoded;
                 return (
                   <div
                     key={idx}

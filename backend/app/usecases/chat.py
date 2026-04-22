@@ -61,7 +61,7 @@ from app.conversation_document_store import (
     get_or_update_persistent_attachments,
 )
 from app.document_chunker import process_attachments_for_context_window
-from app.pdf_url_handler import download_pdf, extract_pdf_urls
+from app.pdf_url_handler import download_pdf, extract_markdown_urls, extract_pdf_urls
 from app.utils import get_aest_now, get_current_time
 from app.web_url_handler import extract_web_urls, fetch_urls_content
 from app.vector_search import (
@@ -76,33 +76,59 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-def process_pdf_urls_in_message(message: MessageModel) -> list[str]:
+def process_pdf_urls_in_message(
+    message: MessageModel,
+) -> tuple[list[str], list[str]]:
     """Scan text content in a message for PDF URLs, download them, and add as attachments.
 
-    Returns a list of successfully processed PDF URLs for logging/display purposes.
+    Handles:
+    - Bare .pdf extension URLs: https://example.com/paper.pdf
+    - Markdown-linked .pdf URLs: [title](https://example.com/paper.pdf)
+    - Markdown-linked non-.pdf URLs that serve PDF content: [title](https://arxiv.org/pdf/2312.12345)
+
+    Returns a tuple (successful_urls, failed_urls). Successful means the PDF was
+    downloaded and attached; failed means a PDF URL was detected but the download
+    did not produce valid PDF bytes (too large, HTTP error, HTML returned, etc.).
     """
-    # Collect all PDF URLs from text content
     pdf_urls: list[str] = []
+    markdown_candidate_urls: list[str] = []
+
     for content in message.content:
         if isinstance(content, TextContentModel):
+            # .pdf extension URLs (bare and markdown-embedded)
             urls = extract_pdf_urls(content.body)
-            pdf_urls.extend(urls)
+            pdf_urls.extend(u for u in urls if u not in pdf_urls)
+            # All markdown-linked URLs — try non-.pdf ones as PDF candidates
+            for url in extract_markdown_urls(content.body):
+                if url not in pdf_urls and url not in markdown_candidate_urls:
+                    markdown_candidate_urls.append(url)
 
-    if not pdf_urls:
-        return []
+    # Limit total PDFs to 5; allocate remaining slots to markdown candidates
+    remaining_slots = max(0, 5 - len(pdf_urls))
+    candidates = markdown_candidate_urls[:remaining_slots]
+    all_urls = pdf_urls + candidates
 
-    logger.info(f"Found {len(pdf_urls)} PDF URL(s) in message: {pdf_urls}")
+    if not all_urls:
+        return [], []
 
-    # Download PDFs in parallel
+    logger.info(
+        f"Found {len(pdf_urls)} PDF URL(s) and {len(candidates)} markdown URL candidate(s) to try"
+    )
+
     from concurrent.futures import ThreadPoolExecutor
 
-    with ThreadPoolExecutor(max_workers=min(len(pdf_urls), 5)) as executor:
-        downloads = list(executor.map(download_pdf, pdf_urls))
+    with ThreadPoolExecutor(max_workers=min(len(all_urls), 5)) as executor:
+        downloads = list(executor.map(download_pdf, all_urls))
 
     processed_urls: list[str] = []
-    for url, result in zip(pdf_urls, downloads):
+    failed_urls: list[str] = []
+    for url, result in zip(all_urls, downloads):
         if result is None:
-            logger.warning(f"Skipping PDF URL (download failed): {url}")
+            # Only track failures for URLs that were expected to be PDFs —
+            # markdown candidates that aren't actually PDFs aren't "failures"
+            if url in pdf_urls:
+                failed_urls.append(url)
+            logger.warning(f"Skipping URL (download failed or not a PDF): {url}")
             continue
 
         filename, pdf_bytes = result
@@ -112,12 +138,11 @@ def process_pdf_urls_in_message(message: MessageModel) -> list[str]:
             file_name=filename,
         )
 
-        # Insert attachment before the text content (same as normal file attachments)
         message.content.insert(0, attachment)
         processed_urls.append(url)
         logger.info(f"Added PDF attachment from URL: {url} as {filename}")
 
-    return processed_urls
+    return processed_urls, failed_urls
 
 
 def process_web_urls_in_message(message: MessageModel) -> list[tuple[str, str]]:
@@ -487,6 +512,8 @@ def chat(
 
     # Process PDF URLs and web URLs concurrently — they are independent I/O
     web_url_context: list[tuple[str, str]] = []
+    processed_pdf_urls: list[str] = []
+    failed_pdf_urls: list[str] = []
     if not chat_input.continue_generate:
         user_message = message_map.get(user_msg_id)
         if user_message:
@@ -500,10 +527,14 @@ def chat(
                     process_web_urls_in_message, user_message
                 )
 
-            processed_pdf_urls = pdf_future.result()
+            processed_pdf_urls, failed_pdf_urls = pdf_future.result()
             if processed_pdf_urls:
                 logger.info(
                     f"Processed {len(processed_pdf_urls)} PDF URL(s) from user message"
+                )
+            if failed_pdf_urls:
+                logger.warning(
+                    f"Failed to download {len(failed_pdf_urls)} PDF URL(s): {failed_pdf_urls}"
                 )
             web_url_context = web_future.result()
             if web_url_context:
@@ -542,6 +573,30 @@ def chat(
                 f"--- Content from {url} ---\n{content}\n--- End of content ---\n"
             )
         instructions.append("\n".join(url_context_lines))
+
+    # Tell the model that PDF URLs have been downloaded and are already attached —
+    # without this note it may still say "I cannot access URLs" even when the bytes are present.
+    if processed_pdf_urls:
+        instructions.append(
+            "The user's message references PDF URL(s) that have been automatically downloaded "
+            "and are attached to this message as document blocks. Do not say you cannot access "
+            "URLs — the PDF content is already available. Analyse the attached document(s) to "
+            "answer the user's question. Successfully fetched: "
+            + ", ".join(processed_pdf_urls)
+        )
+
+    # If the app attempted to download a PDF URL but failed (too large, HTTP error,
+    # HTML returned, etc.), tell the model the real reason so it doesn't hallucinate
+    # "I cannot access URLs" — the app tried, it just failed.
+    if failed_pdf_urls:
+        instructions.append(
+            "The user's message references PDF URL(s) that the app tried to download but could "
+            "not retrieve (possible reasons: file too large, server error, authentication required, "
+            "or the URL did not return a valid PDF). Acknowledge honestly that the download failed "
+            "and suggest the user either download and upload the PDF directly, paste the relevant "
+            "text, or enable web search. Failed URL(s): "
+            + ", ".join(failed_pdf_urls)
+        )
 
     related_documents: list[RelatedDocumentModel] = []
     search_results: list[SearchResult] = []
