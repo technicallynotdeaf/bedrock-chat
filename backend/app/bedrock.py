@@ -1212,6 +1212,13 @@ def get_model_id(
             logger.warning(
                 f"Region '{bedrock_region}' does not support cross-region inference for model '{model}'."
             )
+            
+    # 2.5. Always use regional profile if it's AU-only (required for on-demand
+    # invocation even when cross-region routing is disabled)
+    regional_profile_id = get_regional_inference_profile_id(model, bedrock_region)
+    if regional_profile_id and regional_profile_id.startswith("au."):
+        logger.info(f"Using AU regional inference profile: {regional_profile_id} for model '{model}'")
+        return regional_profile_id
 
     # 3. Use standalone model (no global or cross-region inference)
     logger.info(f"Using local model ID: {base_model_id} for model '{model}'")
