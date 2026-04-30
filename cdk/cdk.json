@@ -67,7 +67,6 @@
         "secretName": "bedrock-chat-entra-oidc"
       }
     ],
-    "userPoolDomainPrefix": "acilallen-bedrock-login",
     "allowedSignUpEmailDomains": [],
     "autoJoinUserGroups": ["CreatingBotAllowed"],
     "selfSignUpEnabled": true,
