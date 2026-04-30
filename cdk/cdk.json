@@ -60,8 +60,14 @@
       "8000:0000:0000:0000:0000:0000:0000:0000/1"
     ],
     "allowedCountries": [],
-    "identityProviders": [],
-    "userPoolDomainPrefix": "",
+    "identityProviders": [
+      {
+        "service": "oidc",
+        "serviceName": "EntraID",
+        "secretName": "bedrock-chat-entra-oidc"
+      }
+    ],
+    "userPoolDomainPrefix": "acilallen-bedrock-chat",
     "allowedSignUpEmailDomains": [],
     "autoJoinUserGroups": ["CreatingBotAllowed"],
     "selfSignUpEnabled": true,
